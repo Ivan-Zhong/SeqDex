@@ -12,7 +12,7 @@ from copy import deepcopy
 import random
 
 from isaacgym import gymapi
-from isaacgym.gymutil import get_property_setter_map, get_property_getter_map, get_default_setter_args, apply_random_samples, check_buckets, generate_random_samples
+from isaacgym.gymutil import get_property_setter_map, get_property_getter_map, get_default_setter_args, apply_random_samples, check_buckets, generate_random_samples, draw_line
 
 import numpy as np
 import torch
@@ -133,6 +133,11 @@ class BaseTask():
 
         # apply actions
         self.pre_physics_step(actions)
+
+        for env in self.envs:
+            draw_line(gymapi.Vec3(0, 0, 0), gymapi.Vec3(0, 0, 1), gymapi.Vec3(0, 0, 1), self.gym, self.viewer, env)
+            draw_line(gymapi.Vec3(0, 0, 0), gymapi.Vec3(0, 1, 0), gymapi.Vec3(0, 1, 0), self.gym, self.viewer, env)
+            draw_line(gymapi.Vec3(0, 0, 0), gymapi.Vec3(1, 0, 0), gymapi.Vec3(1, 0, 0), self.gym, self.viewer, env)
 
         # step physics and render each frame
         for i in range(self.control_freq_inv):
