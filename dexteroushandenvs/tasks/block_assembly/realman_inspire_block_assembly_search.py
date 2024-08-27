@@ -39,8 +39,8 @@ from isaacgym import gymtorch
 from isaacgym import gymapi
 from isaacgym.torch_utils import *
 
-
 from tasks.hand_base.base_task import BaseTask
+
 
 class RealManInspireBlockAssemblySearch(BaseTask):
 
@@ -193,10 +193,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         # create some wrapper tensors for different slices
         self.arm_hand_default_dof_pos = torch.zeros(self.num_arm_hand_dofs, dtype=torch.float, device=self.device)
-        self.arm_hand_default_dof_pos[:7] = torch.tensor([0.9467, -0.5708, -2.4997, -2.3102, -0.7739,  2.6616, 0.6497], dtype=torch.float, device=self.device)        
+        self.arm_hand_default_dof_pos[:7] = torch.tensor([3.14, 0.6, 0, 0.6, 0., 0.59, -1.571], dtype=torch.float, device=self.device)        
 
-        self.arm_hand_default_dof_pos[7:] = to_torch([0.0, -0.174, 0.785, 0.785,
-                                            0.0, -0.174, 0.785, 0.785, 0.0, -0.174, 0.785, 0.785], dtype=torch.float, device=self.device)
+        self.arm_hand_default_dof_pos[7:] = to_torch([0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785], dtype=torch.float, device=self.device)
 
         self.arm_hand_prepare_dof_poses = torch.zeros((self.num_envs, self.num_arm_hand_dofs), dtype=torch.float, device=self.device)
         self.end_effector_rotation = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
@@ -205,9 +204,8 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.end_effector_rot_list = []
 
         # rot = [0, 0.707, 0, 0.707]
-        self.arm_hand_prepare_dof_pos = to_torch([0.0, -0.49826458111314524, -0.01990020486871322, -2.4732269941140346, -0.01307073642274261, 2.00396583422025, 1.5480939705504309,
-                                                0.0, -0.174, 0.785, 0.785,
-                                            0.0, -0.174, 0.785, 0.785, 0.0, -0.174, 0.785, 0.785], dtype=torch.float, device=self.device)
+        self.arm_hand_prepare_dof_pos = to_torch([3.14, 0.6, 0, 0.6, 0., 0.59, -1.571,
+             0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785], dtype=torch.float, device=self.device)
         self.arm_hand_prepare_dof_pos_list.append(self.arm_hand_prepare_dof_pos)
         self.end_effector_rot_list.append(to_torch([0, 0.707, 0, 0.707], device=self.device))
 
