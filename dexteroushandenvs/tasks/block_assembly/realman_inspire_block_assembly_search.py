@@ -30,6 +30,7 @@ import os
 import random
 import pickle
 import time
+import math
 
 import torch
 import numpy as np
@@ -38,6 +39,7 @@ import cv2
 from isaacgym import gymtorch
 from isaacgym import gymapi
 from isaacgym.torch_utils import *
+from scipy.spatial.transform import Rotation as R
 
 from tasks.hand_base.base_task import BaseTask
 
@@ -1597,6 +1599,10 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         delta = control_ik(self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :7], self.device, dpose, self.num_envs)
         self.cur_targets[:, :7] = self.arm_hand_dof_pos[:, 0:7] + delta[:, :7]
 
+        self.gym.clear_lines(self.viewer)
+        self.draw_point(self.envs[0], self.segmentation_target_pos[0], target_rot, radius=0.1)
+        self.draw_point(self.envs[0], self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3], target_rot, radius=0.1, color=[0, 0, 1])
+
         if self.apply_teleoper_perturbation:
             # IK control robotic arm
             pos_err = self.perturbation_pos * 0.1
@@ -1675,6 +1681,48 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         # self.heap_movement_penalty = torch.where(self.emergence_reward < 0.05, torch.mean(torch.norm(all_lego_brick_pos - last_all_lego_brick_pos, p=2, dim=-1), dim=-1, keepdim=False), torch.zeros_like(self.heap_movement_penalty))
         
         self.last_all_lego_brick_pos = self.all_lego_brick_pos.clone()
+
+    def draw_point(
+        self,
+        env,
+        center,
+        rotation,
+        ax="xyz",
+        radius=0.02,
+        num_segments=32,
+        color=(1, 0, 0),
+    ):
+        rotation = rotation.cpu().numpy()
+        center = center.cpu().numpy()
+        rot_matrix = R.from_quat(rotation).as_matrix()
+
+        for ax in list(ax):
+            # 根据指定的轴选择正确的平面
+            if ax.lower() == "x":
+                plane_axes = [1, 2]  # yz平面
+            elif ax.lower() == "y":
+                plane_axes = [0, 2]  # xz平面
+            else:  # 默认为z轴
+                plane_axes = [0, 1]  # xy平面
+
+            points = []
+            for i in range(num_segments + 1):
+                angle = 2 * math.pi * i / num_segments
+                # 在选定的平面上计算点
+                local_point = np.zeros(3)
+                local_point[plane_axes[0]] = radius * math.cos(angle)
+                local_point[plane_axes[1]] = radius * math.sin(angle)
+
+                # 将局部坐标转换为全局坐标
+                global_point = center + rot_matrix @ local_point
+                points.append(global_point)
+
+            for i in range(num_segments):
+                start = points[i]
+                end = points[i + 1]
+                self.gym.add_lines(self.viewer, env, 1, [*start, *end], color)
+
+
 #####################################################################
 ###=========================jit functions=========================###
 #####################################################################
