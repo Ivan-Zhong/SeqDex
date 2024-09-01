@@ -14,15 +14,6 @@ env:
   useRelativeControl: False
   dofSpeedScale: 5.0
   actionsMovingAverage: 0.6
-  controlFrequencyInv: 1 # 60 Hz
-
-  startPositionNoise: 0.0
-  startRotationNoise: 0.0
-
-  resetPositionNoise: 0.0
-  resetRotationNoise: 0.0
-  resetDofPosRandomInterval: 0.
-  resetDofVelRandomInterval: 0.0
 
   distRewardScale: -1
   rotRewardScale: 1.0
