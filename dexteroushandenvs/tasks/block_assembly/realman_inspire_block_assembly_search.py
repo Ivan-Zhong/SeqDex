@@ -48,41 +48,17 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.cfg = cfg
         self.sim_params = sim_params
         self.physics_engine = physics_engine
-        self.agent_index = agent_index
-
-        self.is_multi_agent = is_multi_agent
 
         self.randomize = self.cfg["task"]["randomize"]
         self.randomization_params = self.cfg["task"]["randomization_params"]
-        
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
-
-        self.dist_reward_scale = self.cfg["env"]["distRewardScale"]
-        self.rot_reward_scale = self.cfg["env"]["rotRewardScale"]
-        self.action_penalty_scale = self.cfg["env"]["actionPenaltyScale"]
-        self.success_tolerance = self.cfg["env"]["successTolerance"]
-        self.fall_dist = self.cfg["env"]["fallDistance"]
-        self.fall_penalty = self.cfg["env"]["fallPenalty"]
-        self.rot_eps = self.cfg["env"]["rotEps"]
         self.hand_reset_step = self.cfg["env"]["handResetStep"]
-
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
-        self.force_torque_obs_scale = 10.0  # scale factor of velocity based observations
-
-        self.force_scale = self.cfg["env"].get("forceScale", 0.0)
         self.force_prob_range = self.cfg["env"].get("forceProbRange", [0.001, 0.1])
-        self.force_decay = self.cfg["env"].get("forceDecay", 0.99)
-        self.force_decay_interval = self.cfg["env"].get("forceDecayInterval", 0.08)
-
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
-
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
-
         self.max_episode_length = self.cfg["env"]["episodeLength"]
-        self.print_success_stat = self.cfg["env"]["printNumSuccesses"]
-        self.max_consecutive_successes = self.cfg["env"]["maxConsecutiveSuccesses"]
         self.av_factor = self.cfg["env"].get("averFactor", 0.1)
-        self.spin_coef = self.cfg["env"].get("spin_coef", 1.0)
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
         self.stack_obs = 3
@@ -168,7 +144,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.total_steps = 0
 
         # object apply random forces parameters
-        self.force_decay = to_torch(self.force_decay, dtype=torch.float, device=self.device)
         self.force_prob_range = to_torch(self.force_prob_range, dtype=torch.float, device=self.device)
         self.random_force_prob = torch.exp((torch.log(self.force_prob_range[0]) - torch.log(self.force_prob_range[1]))
                                            * torch.rand(self.num_envs, device=self.device) + torch.log(self.force_prob_range[1]))
@@ -186,7 +161,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.meta_rew_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.float)
 
-        self.perturb_steps = torch.zeros_like(self.progress_buf, dtype=torch.float32)
         self.perturb_direction = torch_rand_float(-1, 1, (self.num_envs, 6), device=self.device).squeeze(-1)
         self.segmentation_target_init_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
         self.segmentation_target_init_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
@@ -652,10 +626,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
     def compute_reward(self):
         self.rew_buf[:], self.reset_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
-            self.reset_buf, self.progress_buf, self.successes, self.consecutive_successes, self.contacts, self.palm_contacts_z, self.segmentation_target_init_pos,
+            self.reset_buf, self.progress_buf, self.successes, self.consecutive_successes, self.contacts, self.segmentation_target_init_pos,
             self.max_episode_length, self.segmentation_target_pos, self.emergence_reward, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos, self.heap_movement_penalty,
-            self.actions, self.fall_penalty, 
-            self.max_consecutive_successes, self.av_factor, self.init_heap_movement_penalty
+            self.actions, self.av_factor, self.init_heap_movement_penalty
         )
 
         self.meta_rew_buf += self.rew_buf[:].clone()
@@ -675,18 +648,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.extras['meta_reward'] = self.meta_rew_buf
 
         self.total_steps += 1
-
-        if self.print_success_stat:
-            print("Total steps = {}".format(self.total_steps))
-            self.total_resets = self.total_resets + self.reset_buf.sum()
-            direct_average_successes = self.total_successes + self.successes.sum()
-            self.total_successes = self.total_successes + (self.successes * self.reset_buf).sum()
-
-            # The direct average shows the overall result more quickly, but slightly undershoots long term
-            # policy performance.
-            print("Direct average consecutive successes = {:.1f}".format(direct_average_successes/(self.total_resets + self.num_envs)))
-            if self.total_resets > 0:
-                print("Post-Reset average consecutive successes = {:.1f}".format(self.total_successes/self.total_resets))
 
     def compute_observations(self):
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -806,12 +767,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.camera_view_segmentation_target_rot, self.camera_view_segmentation_target_pos = tf_combine(self.q_camera_inv, self.p_camera_inv, self.segmentation_target_rot, self.segmentation_target_pos)
 
         contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
-        palm_contacts = contacts[:, 10, :]
         contacts = contacts[:, self.sensor_handle_indices, :] # 12
         contacts = torch.norm(contacts, dim=-1)
         self.contacts = torch.where(contacts >= 0.1, 1.0, 0.0)
-
-        self.palm_contacts_z = palm_contacts[:, 2]
 
         for i in range(len(self.contacts[0])):
             if self.contacts[0][i] == 1.0:
@@ -859,7 +817,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.states_buf[:, 81:88] = self.hand_base_pose
 
         self.states_buf[:, 88:95] = self.segmentation_target_pose
-
 
         self.states_buf[:, 96:99] = self.hand_pos_history_0
         self.states_buf[:, 99:102] = self.hand_pos_history_1
@@ -948,7 +905,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             print("insert_success_rate: ", sum(self.record_8_type) / 8)
 
         # generate random values
-        self.perturb_steps[env_ids] = torch_rand_float(0, self.max_episode_length, (len(env_ids), 1), device=self.device).squeeze(-1)
         self.perturb_direction[env_ids] = torch_rand_float(-1, 1, (len(env_ids), 6), device=self.device).squeeze(-1)
 
         # generate random values
@@ -1249,9 +1205,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 #####################################################################
 
 def compute_hand_reward(
-    reset_buf, progress_buf, successes, consecutive_successes, arm_contacts, palm_contacts_z, segmentation_target_init_pos,
+    reset_buf, progress_buf, successes, consecutive_successes, arm_contacts, segmentation_target_init_pos,
     max_episode_length: float, segmentation_target_pos, emergence_reward, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos, heap_movement_penalty,
-    actions, fall_penalty: float, max_consecutive_successes: int, av_factor: float, init_heap_movement_penalty
+    actions, av_factor: float, init_heap_movement_penalty
 ):
     arm_hand_finger_dist = (torch.norm(segmentation_target_pos - arm_hand_if_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_mf_pos, p=2, dim=-1)
                             + torch.norm(segmentation_target_pos - arm_hand_rf_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_pf_pos, p=2, dim=-1)
@@ -1283,10 +1239,6 @@ def compute_hand_reward(
 
     timed_out = progress_buf >= max_episode_length - 1
     resets = torch.where(timed_out, torch.ones_like(resets), resets)
-
-    # Apply penalty for not reaching the goal
-    if max_consecutive_successes > 0:
-        reward = torch.where(timed_out, reward + 0.5 * fall_penalty, reward)
 
     num_resets = torch.sum(resets)
     finished_cons_successes = torch.sum(successes * resets.float())
