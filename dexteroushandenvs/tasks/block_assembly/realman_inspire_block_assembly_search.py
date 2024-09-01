@@ -52,10 +52,8 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.randomization_params = self.cfg["task"]["randomization_params"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
-        self.force_prob_range = self.cfg["env"].get("forceProbRange", [0.001, 0.1])
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.max_episode_length = self.cfg["env"]["episodeLength"]
-        self.av_factor = self.cfg["env"].get("averFactor", 0.1)
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
         self.stack_obs = 3
@@ -124,26 +122,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
-
-        self.x_unit_tensor = to_torch([1, 0, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
-        self.y_unit_tensor = to_torch([0, 1, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
-        self.z_unit_tensor = to_torch([0, 0, 1], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
-
-        self.successes = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        self.consecutive_successes = torch.zeros(1, dtype=torch.float, device=self.device)
-
-        self.av_factor = to_torch(self.av_factor, dtype=torch.float, device=self.device)
-
-        self.total_successes = 0
-        self.total_resets = 0
-        self.total_steps = 0
-
-        # object apply random forces parameters
-        self.force_prob_range = to_torch(self.force_prob_range, dtype=torch.float, device=self.device)
-        self.random_force_prob = torch.exp((torch.log(self.force_prob_range[0]) - torch.log(self.force_prob_range[1]))
-                                           * torch.rand(self.num_envs, device=self.device) + torch.log(self.force_prob_range[1]))
-
-        self.rb_forces = torch.zeros((self.num_envs, self.num_bodies, 3), dtype=torch.float, device=self.device)
 
         self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.envs[0], self.hand_indices[0], "R_hand_base", gymapi.DOMAIN_ENV)
         print("hand_base_rigid_body_index: ", self.hand_base_rigid_body_index)
@@ -566,13 +544,11 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.lego_segmentation_indices = to_torch(self.lego_segmentation_indices, dtype=torch.long, device=self.device)
 
     def compute_reward(self):
-        self.rew_buf[:], self.reset_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
-            self.reset_buf, self.progress_buf, self.successes, self.consecutive_successes, self.contacts, self.segmentation_target_init_pos,
+        self.rew_buf[:], self.reset_buf[:], self.progress_buf[:] = compute_hand_reward(
+            self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos,
             self.max_episode_length, self.segmentation_target_pos, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos,
-            self.actions, self.av_factor
+            self.actions
         )
-
-        self.total_steps += 1
 
     def compute_observations(self):
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -746,9 +722,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         lego_init_rand_floats = torch_rand_float(-1.0, 1.0, (self.num_envs * 132, 3), device=self.device)
         lego_init_rand_floats.view(self.num_envs, 132, 3)[:, 72:, :] = 0
 
-        # reset rigid body forces
-        self.rb_forces[env_ids, :, :] = 0.0
-
         # reset object
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 0:7] = self.lego_init_states[env_ids].view(-1, 13)[:, 0:7].clone()
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 7:13] = torch.zeros_like(self.root_state_tensor[self.lego_indices[env_ids].view(-1), 7:13])
@@ -759,10 +732,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0] = 0.25 + rand_floats[env_ids, 0] * 0.2
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 1] = 0.19 + rand_floats[env_ids, 0] * 0.15
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 2] = 0.9
-
-        # reset random force probabilities
-        self.random_force_prob[env_ids] = torch.exp((torch.log(self.force_prob_range[0]) - torch.log(self.force_prob_range[1]))
-                                                    * torch.rand(len(env_ids), device=self.device) + torch.log(self.force_prob_range[1]))
 
         # reset shadow hand
         pos = self.arm_hand_default_dof_pos
@@ -784,7 +753,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
-        self.successes[env_ids] = 0
 
     def post_reset(self, env_ids, hand_indices, rand_floats):
         # step physics and render each frame
@@ -945,9 +913,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 #####################################################################
 
 def compute_hand_reward(
-    reset_buf, progress_buf, successes, consecutive_successes, arm_contacts, segmentation_target_init_pos,
+    reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos,
     max_episode_length: float, segmentation_target_pos, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos,
-    actions, av_factor: float
+    actions
 ):
     arm_hand_finger_dist = (torch.norm(segmentation_target_pos - arm_hand_if_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_mf_pos, p=2, dim=-1)
                             + torch.norm(segmentation_target_pos - arm_hand_rf_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_pf_pos, p=2, dim=-1)
@@ -958,7 +926,6 @@ def compute_hand_reward(
 
     arm_contacts_penalty = torch.sum(arm_contacts, dim=-1)
 
-    # Total reward is: position distance + orientation alignment + action regularization + success bonus + fall penalty
     object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 1000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 1000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 1000
     reward = dist_rew - arm_contacts_penalty - action_penalty + object_up_reward
 
@@ -968,17 +935,12 @@ def compute_hand_reward(
 
     # Fall penalty: distance to the goal is larger than a threshold
     # Check env termination conditions, including maximum success number
-    resets = torch.where(arm_hand_finger_dist <= -1, torch.ones_like(reset_buf), reset_buf)
+    resets = reset_buf
 
     timed_out = progress_buf >= max_episode_length - 1
     resets = torch.where(timed_out, torch.ones_like(resets), resets)
 
-    num_resets = torch.sum(resets)
-    finished_cons_successes = torch.sum(successes * resets.float())
-
-    cons_successes = torch.where(num_resets > 0, av_factor*finished_cons_successes/num_resets + (1.0 - av_factor)*consecutive_successes, consecutive_successes)
-
-    return reward, resets, progress_buf, successes, cons_successes
+    return reward, resets, progress_buf
 
 def orientation_error(desired, current):
 	cc = quat_conjugate(current)
