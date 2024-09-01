@@ -6,16 +6,15 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import sys
-import os
 import operator
 from copy import deepcopy
 import random
 
+import numpy as np
+import torch
 from isaacgym import gymapi
 from isaacgym.gymutil import get_property_setter_map, get_property_getter_map, get_default_setter_args, apply_random_samples, check_buckets, generate_random_samples, draw_line
 
-import numpy as np
-import torch
 
 
 # Base class for RL tasks

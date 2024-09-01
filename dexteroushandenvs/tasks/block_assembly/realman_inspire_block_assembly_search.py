@@ -27,15 +27,15 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import os
-import random
-import pickle
 import time
 import math
+import random
+import pickle
 
+import cv2
 import torch
 import numpy as np
 import torch.optim as optim
-import cv2
 from isaacgym import gymtorch
 from isaacgym import gymapi
 from isaacgym.torch_utils import *
@@ -49,7 +49,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless, agent_index=[[[0, 1, 2, 3, 4, 5]], [[0, 1, 2, 3, 4, 5]]], is_multi_agent=False):
 
         self.cfg = cfg
-
         self.sim_params = sim_params
         self.physics_engine = physics_engine
         self.agent_index = agent_index
@@ -65,7 +64,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.rot_reward_scale = self.cfg["env"]["rotRewardScale"]
         self.action_penalty_scale = self.cfg["env"]["actionPenaltyScale"]
         self.success_tolerance = self.cfg["env"]["successTolerance"]
-        self.reach_goal_bonus = self.cfg["env"]["reachGoalBonus"]
         self.fall_dist = self.cfg["env"]["fallDistance"]
         self.fall_penalty = self.cfg["env"]["fallPenalty"]
         self.rot_eps = self.cfg["env"]["rotEps"]
@@ -83,16 +81,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.force_prob_range = self.cfg["env"].get("forceProbRange", [0.001, 0.1])
         self.force_decay = self.cfg["env"].get("forceDecay", 0.99)
         self.force_decay_interval = self.cfg["env"].get("forceDecayInterval", 0.08)
-        self.rotation_axis = "y"
-        if self.rotation_axis == "x":
-            self.rotation_id = 0
-        elif self.rotation_axis == "y":
-            self.rotation_id = 1
-        else:
-            self.rotation_id = 2
 
-        self.shadow_hand_dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
-        self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
@@ -102,58 +91,21 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.print_success_stat = self.cfg["env"]["printNumSuccesses"]
         self.max_consecutive_successes = self.cfg["env"]["maxConsecutiveSuccesses"]
         self.av_factor = self.cfg["env"].get("averFactor", 0.1)
-
-        self.object_type = self.cfg["env"]["objectType"]
         self.spin_coef = self.cfg["env"].get("spin_coef", 1.0)
-        assert self.object_type in ["block", "egg", "pen"]
-
-        self.ignore_z = (self.object_type == "pen")
-
-        self.robot_asset_files_dict = {
-            "normal": "mjcf/realman_mjcf/realman_inspire_mjmodel.xml",
-            "large":  "urdf/xarm6/xarm6_allegro_left_fsr_large.urdf"
-        }
-        self.asset_files_dict = {
-            "block": "urdf/objects/cube_multicolor.urdf",
-            "egg": "mjcf/box/mobility.urdf",
-            "pen": "mjcf/open_ai_assets/hand/pen.xml"
-        }
-
-        # can be "full_no_vel", "full", "full_state"
-        self.obs_type = self.cfg["env"]["observationType"]
-
-        if not (self.obs_type in ["full_no_vel", "full", "full_state", "full_contact", "partial_contact"]):
-            raise Exception(
-                "Unknown type of observations!\nobservationType should be one of: [openai, full_no_vel, full, full_state]")
-
-        print("Obs type:", self.obs_type)
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
-
         self.stack_obs = 3
 
-        self.num_obs_dict = {
-            "full_no_vel": 50,
-            "full": 72,
-            "full_state": 88,
-            "full_contact": 90,
-            "partial_contact": 62
-        }
+        self.obs_type = "partial_contact"
+        self.asymmetric_obs = True
+        self.num_observations = 62
+        self.num_states = 188
+        self.num_actions = 13
         self.up_axis = 'z'
 
-        self.use_vel_obs = False
-        self.fingertip_obs = True
-        self.asymmetric_obs = self.cfg["env"]["asymmetric_observations"]
-
-        num_states = 0
-        if self.asymmetric_obs:
-            num_states = 188
-
-        self.one_frame_num_obs = self.num_obs_dict[self.obs_type]
-        self.one_frame_num_states = num_states
-        self.cfg["env"]["numObservations"] = self.num_obs_dict[self.obs_type] * self.stack_obs
-        self.cfg["env"]["numStates"] = num_states * self.stack_obs
-        self.cfg["env"]["numActions"] = 13
+        self.cfg["env"]["numObservations"] = self.num_observations * self.stack_obs
+        self.cfg["env"]["numStates"] = self.num_states * self.stack_obs
+        self.cfg["env"]["numActions"] = self.num_actions
 
         self.cfg["device_type"] = device_type
         self.cfg["device_id"] = device_id
@@ -257,7 +209,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.y_unit_tensor = to_torch([0, 1, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
         self.z_unit_tensor = to_torch([0, 0, 1], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
 
-        self.reset_goal_buf = self.reset_buf.clone()
         self.successes = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.consecutive_successes = torch.zeros(1, dtype=torch.float, device=self.device)
 
@@ -274,7 +225,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                                            * torch.rand(self.num_envs, device=self.device) + torch.log(self.force_prob_range[1]))
 
         self.rb_forces = torch.zeros((self.num_envs, self.num_bodies, 3), dtype=torch.float, device=self.device)
-        self.object_pose_for_open_loop = torch.zeros_like(self.root_state_tensor[self.object_indices, 0:7])
 
         self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.envs[0], self.hand_indices[0], "R_hand_base", gymapi.DOMAIN_ENV)
         print("hand_base_rigid_body_index: ", self.hand_base_rigid_body_index)
@@ -312,12 +262,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             self.saved_searching_ternimal_states_list.append(self.saved_searching_ternimal_states.clone())
             self.saved_searching_ternimal_states_index_list.append(0)
             self.saved_searching_hand_ternimal_states_list.append(self.saved_searching_hand_ternimal_states)
-
-        self.multi_object_index = torch.zeros((self.num_envs, 8), device=self.device, dtype=torch.float)
-        for i in range(self.num_envs):
-            self.multi_object_index[i, i % 8] = 1
-
-        self.use_multi_head = False
 
         self.apply_teleoper_perturbation = False
         self.perturb_steps = torch.zeros_like(self.progress_buf, dtype=torch.float32)
@@ -413,16 +357,11 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
         asset_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets')
-
-        arm_hand_asset_file = self.robot_asset_files_dict["normal"]
-        # arm_hand_asset_file = "urdf/xarm6/xarm6_allegro_left.urdf"
-        #"urdf/xarm6/xarm6_allegro_fsr.urdf"
+        arm_hand_asset_file = "mjcf/realman_mjcf/realman_inspire_mjmodel.xml"
 
         if "asset" in self.cfg["env"]:
             asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
-            # arm_hand_asset_file = self.cfg["env"]["asset"].get("assetFileName", arm_hand_asset_file)
-
-        object_asset_file = self.asset_files_dict[self.object_type]
+            arm_hand_asset_file = self.cfg["env"]["asset"].get("assetFileName", arm_hand_asset_file)
 
         # load arm and hand.
         asset_options = gymapi.AssetOptions()
@@ -515,22 +454,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.arm_hand_dof_default_pos = to_torch(self.arm_hand_dof_default_pos, device=self.device)
         self.arm_hand_dof_default_vel = to_torch(self.arm_hand_dof_default_vel, device=self.device)
 
-        # load manipulated object and goal assets
-        object_asset_options = gymapi.AssetOptions()
-        object_asset_options.disable_gravity = True
-        object_asset_options.fix_base_link = True
-        # object_asset_options.mesh_normal_mode = gymapi.COMPUTE_PER_VERTEX
-        # object_asset_options.override_com = True
-        # object_asset_options.override_inertia = True
-        # object_asset_options.vhacd_enabled = True
-        # object_asset_options.vhacd_params = gymapi.VhacdParams()
-        # object_asset_options.vhacd_params.resolution = 100000
-        # object_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        object_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
-
-        object_asset_options.disable_gravity = True
-        goal_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
-
         # Put objects in the scene.
         arm_hand_start_pose = gymapi.Transform()
         arm_hand_start_pose.p = gymapi.Vec3(-0.35, 0.0, 0.6)
@@ -593,21 +516,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         box_start_poses.append(box_right_start_pose)
         box_start_poses.append(box_former_start_pose)
         box_start_poses.append(box_after_start_pose)
-
-        object_start_pose = gymapi.Transform()
-        object_start_pose.p = gymapi.Vec3(0, 0.0, -10.78)
-        object_start_pose.r = gymapi.Quat().from_euler_zyx(0, 0, 1.571)
-
-        if self.object_type == "pen":
-            object_start_pose.p.z = arm_hand_start_pose.p.z + 0.02
-
-        self.goal_displacement = gymapi.Vec3(-0.2, -0.06, -10.12)
-        self.goal_displacement_tensor = to_torch(
-            [self.goal_displacement.x, self.goal_displacement.y, self.goal_displacement.z], device=self.device)
-        goal_start_pose = gymapi.Transform()
-        goal_start_pose.p = object_start_pose.p + self.goal_displacement
-
-        goal_start_pose.p.z -= 0.04
 
         lego_path = "urdf/blender/urdf/"
         all_lego_files_name = os.listdir("../assets/" + lego_path)
@@ -730,15 +638,12 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.arm_hands = []
         self.envs = []
 
-        self.object_init_state = []
         self.lego_init_states = []
         self.hand_start_states = []
         self.extra_lego_init_states = []
 
         self.hand_indices = []
         self.fingertip_indices = []
-        self.object_indices = []
-        self.goal_object_indices = []
         self.predict_object_indices = []
         self.table_indices = []
         self.lego_indices = []
@@ -746,10 +651,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.extra_object_indices = []
 
         self.segmentation_id_list = []
-
-        arm_hand_rb_count = self.gym.get_asset_rigid_body_count(arm_hand_asset)
-        object_rb_count = self.gym.get_asset_rigid_body_count(object_asset)
-        self.object_rb_handles = list(range(arm_hand_rb_count, arm_hand_rb_count + object_rb_count))
 
         self.cameras = []
         self.camera_tensors = []
@@ -795,19 +696,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             hand_idx = self.gym.get_actor_index(env_ptr, arm_hand_actor, gymapi.DOMAIN_SIM)
             self.hand_indices.append(hand_idx)
 
-            # add object
-            object_handle = self.gym.create_actor(env_ptr, object_asset, object_start_pose, "object", i, 0, 0)
-            self.object_init_state.append([object_start_pose.p.x, object_start_pose.p.y, object_start_pose.p.z,
-                                           object_start_pose.r.x, object_start_pose.r.y, object_start_pose.r.z, object_start_pose.r.w,
-                                           0, 0, 0, 0, 0, 0])
-            object_idx = self.gym.get_actor_index(env_ptr, object_handle, gymapi.DOMAIN_SIM)
-            self.object_indices.append(object_idx)
-
-            # add goal object
-            goal_handle = self.gym.create_actor(env_ptr, goal_asset, goal_start_pose, "goal_object", i + self.num_envs, 0, 0)
-            goal_object_idx = self.gym.get_actor_index(env_ptr, goal_handle, gymapi.DOMAIN_SIM)
-            self.goal_object_indices.append(goal_object_idx)
-
             # add table
             table_handle = self.gym.create_actor(env_ptr, table_asset, table_pose, "table", i, -1, 0)
             # self.gym.set_rigid_body_texture(env_ptr, table_handle, 0, gymapi.MESH_VISUAL, table_texture_handle)
@@ -825,12 +713,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             # add box
             for box_i, box_asset in enumerate(box_assets):
                 box_handle = self.gym.create_actor(env_ptr, box_asset, box_start_poses[box_i], "box_{}".format(box_i), i, 0, 0)
-                # self.lego_init_state.append([lego_init_state.p.x, lego_init_state.p.y, object_start_pose.p.z,
-                #                             lego_init_state.r.x, lego_init_state.r.y, object_start_pose.r.z, object_start_pose.r.w,
-                #                             0, 0, 0, 0, 0, 0])
-                # object_idx = self.gym.get_actor_index(env_ptr, object_handle, gymapi.DOMAIN_SIM)
-                # self.object_indices.append(object_idx)
-                # self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.4, 0))
                 self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
             # add lego
@@ -871,7 +753,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                                         0, 0, 0, 0, 0, 0])
             self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
             extra_object_idx = self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
-            extra_lego_body_props = self.gym.get_actor_rigid_body_properties(env_ptr, extra_lego_handle)
             self.gym.set_rigid_body_color(env_ptr, extra_lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
             self.extra_object_indices.append(extra_object_idx)
 
@@ -887,15 +768,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                 cam_proj = torch.tensor(self.gym.get_camera_proj_matrix(self.sim, env_ptr, camera_handle), device=self.device)
 
             self.mount_rigid_body_index = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "Link7", gymapi.DOMAIN_ENV)
-
-            # Set up object...
-            if self.object_type != "block":
-                self.gym.set_rigid_body_color(
-                    env_ptr, object_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.6, 0.72, 0.98)
-                )
-                self.gym.set_rigid_body_color(
-                    env_ptr, goal_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.6, 0.72, 0.98)
-                )
 
             if self.aggregate_mode > 0:
                 self.gym.end_aggregate(env_ptr)
@@ -925,34 +797,24 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.sensor_handle_indices = to_torch(sensor_handles, dtype=torch.int64)
 
         self.fingertip_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, name) for name in self.fingertip_names]
-        object_rb_props = self.gym.get_actor_rigid_body_properties(env_ptr, object_handle)
-        self.object_rb_masses = [prop.mass for prop in object_rb_props]
 
-        self.object_init_state = to_torch(self.object_init_state, device=self.device, dtype=torch.float).view(self.num_envs, 13)
-        self.goal_states = self.object_init_state.clone()
-        self.goal_states[:, self.up_axis_idx] -= 0.02
-        self.goal_init_state = self.goal_states.clone()
         self.hand_start_states = to_torch(self.hand_start_states, device=self.device).view(self.num_envs, 13)
 
         self.lego_init_states = to_torch(self.lego_init_states, device=self.device).view(self.num_envs, len(lego_assets), 13)
 
         self.fingertip_handles = to_torch(self.fingertip_handles, dtype=torch.long, device=self.device)
-        self.object_rb_handles = to_torch(self.object_rb_handles, dtype=torch.long, device=self.device)
-        self.object_rb_masses = to_torch(self.object_rb_masses, dtype=torch.float, device=self.device)
 
         self.hand_indices = to_torch(self.hand_indices, dtype=torch.long, device=self.device)
-        self.object_indices = to_torch(self.object_indices, dtype=torch.long, device=self.device)
-        self.goal_object_indices = to_torch(self.goal_object_indices, dtype=torch.long, device=self.device)
         self.lego_indices = to_torch(self.lego_indices, dtype=torch.long, device=self.device)
         self.lego_segmentation_indices = to_torch(self.lego_segmentation_indices, dtype=torch.long, device=self.device)
 
     def compute_reward(self, actions):
-        self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
-            torch.tensor(self.spin_coef).to(self.device), self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes, self.consecutive_successes, self.hand_reset_step, self.contacts, self.palm_contacts_z, self.segmentation_object_point_num.squeeze(-1), self.segmentation_target_init_pos,
-            self.max_episode_length, self.object_pos, self.object_rot, self.object_angvel, self.goal_pos, self.goal_rot, self.segmentation_target_pos, self.hand_base_pos, self.emergence_reward, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos, self.heap_movement_penalty,
+        self.rew_buf[:], self.reset_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
+            torch.tensor(self.spin_coef).to(self.device), self.rew_buf, self.reset_buf, self.progress_buf, self.successes, self.consecutive_successes, self.hand_reset_step, self.contacts, self.palm_contacts_z, self.segmentation_object_point_num.squeeze(-1), self.segmentation_target_init_pos,
+            self.max_episode_length, self.segmentation_target_pos, self.hand_base_pos, self.emergence_reward, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos, self.heap_movement_penalty,
             self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.actions, self.action_penalty_scale,
-            self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.rotation_id,
-            self.max_consecutive_successes, self.av_factor, (self.object_type == "pen"), self.init_heap_movement_penalty, self.tvalue,
+            self.success_tolerance, self.fall_dist, self.fall_penalty, 
+            self.max_consecutive_successes, self.av_factor, self.init_heap_movement_penalty, self.tvalue,
         )
 
         self.meta_rew_buf += self.rew_buf[:].clone()
@@ -1046,16 +908,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.robot_base_rot = self.root_state_tensor[self.hand_indices, 3:7]
         self.q_robot_base_inv, self.p_robot_base_inv = tf_inverse(self.robot_base_rot, self.robot_base_pos)
         self.hand_base_view_hand_rot, self.hand_base_view_hand_pos = tf_combine(self.q_robot_base_inv, self.p_robot_base_inv, self.hand_base_rot, self.hand_base_pos)
-
-        self.object_pose = self.root_state_tensor[self.object_indices, 0:7]
-        self.object_pos = self.root_state_tensor[self.object_indices, 0:3]
-        self.object_rot = self.root_state_tensor[self.object_indices, 3:7]
-        self.object_linvel = self.root_state_tensor[self.object_indices, 7:10]
-        self.object_angvel = self.root_state_tensor[self.object_indices, 10:13]
-
-        self.goal_pose = self.goal_states[:, 0:7]
-        self.goal_pos = self.goal_states[:, 0:3]
-        self.goal_rot = self.goal_states[:, 3:7]
 
         self.hand_base_pose = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:7]
         self.hand_base_pos = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3]
@@ -1261,34 +1113,8 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         # self.obs_buf[:, 63:64] = self.segmentation_object_center_point_y / 128
         # self.obs_buf[:, 64:65] = self.segmentation_object_point_num / 100
 
-    def reset_target_pose(self, env_ids, apply_reset=False):
-        rand_floats_x = torch_rand_float(-1, 1, (len(env_ids), 4), device=self.device)
-        rand_floats_y = torch_rand_float(-1, 1, (len(env_ids), 4), device=self.device)
-
-        new_rot = randomize_rotation(rand_floats_x[:, 0], rand_floats_y[:, 1],
-                                     self.x_unit_tensor[env_ids],
-                                     self.y_unit_tensor[env_ids])
-
-        if apply_reset:
-            self.object_pose_for_open_loop[env_ids] = self.goal_states[env_ids, 0:7]
-
-        self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
-        # if not apply_reset:
-        self.goal_states[env_ids, 3:7] = new_rot
-        self.root_state_tensor[self.goal_object_indices[env_ids], 0:3] = self.goal_states[env_ids, 0:3] + self.goal_displacement_tensor
-        self.root_state_tensor[self.goal_object_indices[env_ids], 3:7] = self.goal_states[env_ids, 3:7]
-        self.root_state_tensor[self.goal_object_indices[env_ids], 7:13] = torch.zeros_like(self.root_state_tensor[self.goal_object_indices[env_ids], 7:13])
-
-        if apply_reset:
-            self.object_pose_for_open_loop[env_ids] = self.goal_states[env_ids, 0:7].clone()
-            goal_object_indices = self.goal_object_indices[env_ids].to(torch.int32)
-            self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                         gymtorch.unwrap_tensor(self.root_state_tensor),
-                                                         gymtorch.unwrap_tensor(goal_object_indices), len(env_ids))
-        self.reset_goal_buf[env_ids] = 0
-
     # default robot pose: [0.00, 0.782, -1.087, 3.487, 2.109, -1.415]
-    def reset_idx(self, env_ids, goal_env_ids):
+    def reset_idx(self, env_ids):
         if self.record_completion_time:
             self.end_time = time.time()
             self.complete_time_list.append(self.end_time - self.last_start_time)
@@ -1385,23 +1211,10 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         lego_init_rand_floats = torch_rand_float(-1.0, 1.0, (self.num_envs * 132, 3), device=self.device)
         lego_init_rand_floats.view(self.num_envs, 132, 3)[:, 72:, :] = 0
 
-        # randomize start object poses
-        self.reset_target_pose(env_ids)
-
         # reset rigid body forces
         self.rb_forces[env_ids, :, :] = 0.0
 
         # reset object
-        self.root_state_tensor[self.object_indices[env_ids]] = self.object_init_state[env_ids].clone()
-        self.root_state_tensor[self.object_indices[env_ids], 0:2] = self.object_init_state[env_ids, 0:2] + \
-            self.reset_position_noise * rand_floats[:, 0:2]
-        self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, self.up_axis_idx] + \
-            self.reset_position_noise * rand_floats[:, self.up_axis_idx]
-
-        self.root_state_tensor[self.object_indices[env_ids], 3:7] = self.object_init_state[env_ids, 3:7].clone()
-        self.root_state_tensor[self.object_indices[env_ids], 7:13] = torch.zeros_like(self.root_state_tensor[self.object_indices[env_ids], 7:13])
-        self.object_pose_for_open_loop[env_ids] = self.root_state_tensor[self.object_indices[env_ids], 0:7].clone()
-
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 0:7] = self.lego_init_states[env_ids].view(-1, 13)[:, 0:7].clone()
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 7:13] = torch.zeros_like(self.root_state_tensor[self.lego_indices[env_ids].view(-1), 7:13])
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 0:1] = self.lego_init_states[env_ids].view(-1, 13)[:, 0:1].clone() + lego_init_rand_floats[:, 0].unsqueeze(-1) * 0.02
@@ -1411,15 +1224,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0] = 0.25 + rand_floats[env_ids, 0] * 0.2
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 1] = 0.19 + rand_floats[env_ids, 0] * 0.15
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 2] = 0.9
-
-        object_indices = torch.unique(torch.cat([self.object_indices[env_ids],
-                                                 self.goal_object_indices[env_ids],
-                                                 self.goal_object_indices[goal_env_ids],
-                                                 self.lego_indices[env_ids].view(-1)]).to(torch.int32))
-
-        self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_state_tensor),
-                                                     gymtorch.unwrap_tensor(object_indices), len(object_indices))
 
         # reset random force probabilities
         self.random_force_prob[env_ids] = torch.exp((torch.log(self.force_prob_range[0]) - torch.log(self.force_prob_range[1]))
@@ -1555,10 +1359,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
     def pre_physics_step(self, actions):
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
-        goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
 
         if len(env_ids) > 0:
-            self.reset_idx(env_ids, goal_env_ids)
+            self.reset_idx(env_ids)
 
         self.actions = actions.clone().to(self.device)
 
@@ -1721,12 +1524,12 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 #####################################################################
 
 def compute_hand_reward(
-    spin_coef, rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes, max_hand_reset_length: int, arm_contacts, palm_contacts_z, segmengtation_object_point_num, segmentation_target_init_pos,
-    max_episode_length: float, object_pos, object_rot, object_angvel, target_pos, target_rot, segmentation_target_pos, hand_base_pos, emergence_reward, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos, heap_movement_penalty,
+    spin_coef, rew_buf, reset_buf, progress_buf, successes, consecutive_successes, max_hand_reset_length: int, arm_contacts, palm_contacts_z, segmengtation_object_point_num, segmentation_target_init_pos,
+    max_episode_length: float, segmentation_target_pos, hand_base_pos, emergence_reward, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos, heap_movement_penalty,
     dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
     actions, action_penalty_scale: float,
-    success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
-    fall_penalty: float, rotation_id: int, max_consecutive_successes: int, av_factor: float, ignore_z_rot: bool, init_heap_movement_penalty, tvalue
+    success_tolerance: float, fall_dist: float,
+    fall_penalty: float, max_consecutive_successes: int, av_factor: float, init_heap_movement_penalty, tvalue
 ):
     arm_hand_finger_dist = (torch.norm(segmentation_target_pos - arm_hand_if_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_mf_pos, p=2, dim=-1)
                             + torch.norm(segmentation_target_pos - arm_hand_rf_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_pf_pos, p=2, dim=-1)
@@ -1772,7 +1575,7 @@ def compute_hand_reward(
 
     cons_successes = torch.where(num_resets > 0, av_factor*finished_cons_successes/num_resets + (1.0 - av_factor)*consecutive_successes, consecutive_successes)
 
-    return reward, resets, reset_goal_buf, progress_buf, successes, cons_successes
+    return reward, resets, progress_buf, successes, cons_successes
 
 
 def randomize_rotation(rand0, rand1, x_unit_tensor, y_unit_tensor):
