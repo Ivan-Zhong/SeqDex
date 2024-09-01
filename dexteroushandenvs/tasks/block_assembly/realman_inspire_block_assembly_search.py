@@ -159,7 +159,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.one_frame_num_states = num_states
         self.cfg["env"]["numObservations"] = self.num_obs_dict[self.obs_type] * self.stack_obs
         self.cfg["env"]["numStates"] = num_states * self.stack_obs
-        self.cfg["env"]["numActions"] = 6
+        self.cfg["env"]["numActions"] = 13
 
         self.cfg["device_type"] = device_type
         self.cfg["device_id"] = device_id
@@ -323,7 +323,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         for i in range(self.num_envs):
             self.multi_object_index[i, i % 8] = 1
 
-        self.act_actions = torch.zeros((self.num_envs, 6), dtype=torch.float, device=self.device)
         self.use_multi_head = False
 
         self.apply_teleoper_perturbation = False
@@ -477,7 +476,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                     tendon_props[i].damping = t_damping
 
         # Set up each DOF.
-        actuated_dof_names = ["R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
+        actuated_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
         self.actuated_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_dof_names]
 
         arm_hand_dof_props = self.gym.get_asset_dof_properties(arm_hand_asset)
@@ -893,7 +892,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                 cam_vinv = torch.inverse((torch.tensor(self.gym.get_camera_view_matrix(self.sim, env_ptr, camera_handle)))).to(self.device)
                 cam_proj = torch.tensor(self.gym.get_camera_proj_matrix(self.sim, env_ptr, camera_handle), device=self.device)
 
-            self.mount_rigid_body_index = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "panda_link7", gymapi.DOMAIN_ENV)
+            self.mount_rigid_body_index = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "Link7", gymapi.DOMAIN_ENV)
 
             # Set up object...
             if self.object_type != "block":
@@ -1196,7 +1195,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.states_buf[:, 52:55] = self.arm_hand_pf_pos
         self.states_buf[:, 55:58] = self.arm_hand_th_pos
 
-        self.states_buf[:, 58:64] = self.actions
+        self.states_buf[:, 58:71] = self.actions
         self.states_buf[:, 81:88] = self.hand_base_pose
 
         self.states_buf[:, 88:95] = self.segmentation_target_pose
@@ -1242,15 +1241,15 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.states_buf[:, 182:185] = self.segmentation_target_angvel
 
     def compute_contact_observations(self, full_contact=True):        
-        self.obs_buf[:, 0:12] = unscale(self.arm_hand_dof_pos[:, 7:19],
-                                                            self.arm_hand_dof_lower_limits[7:19],
-                                                            self.arm_hand_dof_upper_limits[7:19])
+        self.obs_buf[:, :19] = unscale(self.arm_hand_dof_pos[:, :19],
+                                                            self.arm_hand_dof_lower_limits[:19],
+                                                            self.arm_hand_dof_upper_limits[:19])
     
-        self.obs_buf[:, 30:36] = self.actions[:, :6] - unscale(self.arm_hand_dof_pos[:, self.actuated_dof_indices],
+        self.obs_buf[:, 30:43] = self.actions[:, :] - unscale(self.arm_hand_dof_pos[:, self.actuated_dof_indices],
                                                             self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
                                                             self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
         
-        self.obs_buf[:, 46:52] = self.actions[:, :6]
+        self.obs_buf[:, 43:56] = self.actions[:, :]
 
         for i in range(self.num_envs):
             self.segmentation_object_point_list = torch.nonzero(torch.where(self.camera_seg_tensors[i] == self.segmentation_id_list[i], self.camera_seg_tensors[i], torch.zeros_like(self.camera_seg_tensors[i])))
@@ -1578,7 +1577,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             self.cur_targets[:, :] = self.seq_policy.predict(input=real_world_obs)
 
         else:
-            self.cur_targets[:, self.actuated_dof_indices] = scale(self.actions[:, :6],
+            self.cur_targets[:, self.actuated_dof_indices] = scale(self.actions[:, :13],
                                                                    self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
                                                                    self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
             self.cur_targets[:, self.actuated_dof_indices] = self.act_moving_average * self.cur_targets[:,
