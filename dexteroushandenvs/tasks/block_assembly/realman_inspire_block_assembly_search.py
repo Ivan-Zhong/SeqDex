@@ -128,13 +128,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         print("Obs type:", self.obs_type)
 
-        # self.palm_name = "palm"
-        # self.contact_sensor_names = ["link_1.0_fsr", "link_2.0_fsr", "link_3.0_tip_fsr",
-        #                              "link_5.0_fsr", "link_6.0_fsr", "link_7.0_tip_fsr", "link_9.0_fsr",
-        #                              "link_10.0_fsr", "link_11.0_tip_fsr", "link_14.0_fsr", "link_15.0_fsr",
-        #                              "link_15.0_tip_fsr"]
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
-        # 11, 13, 16, 20, 22, 24, 27, 29, 32, 36, 39, 40
 
         self.stack_obs = 3
 
