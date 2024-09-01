@@ -30,7 +30,6 @@ import os
 import math
 import random
 
-import cv2
 import torch
 import numpy as np
 from isaacgym import gymtorch
@@ -52,11 +51,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.randomize = self.cfg["task"]["randomize"]
         self.randomization_params = self.cfg["task"]["randomization_params"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
-        self.hand_reset_step = self.cfg["env"]["handResetStep"]
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.force_prob_range = self.cfg["env"].get("forceProbRange", [0.001, 0.1])
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
-        self.debug_viz = self.cfg["env"]["enableDebugVis"]
         self.max_episode_length = self.cfg["env"]["episodeLength"]
         self.av_factor = self.cfg["env"].get("averFactor", 0.1)
 
@@ -78,9 +75,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.cfg["device_id"] = device_id
         self.cfg["headless"] = headless
 
-        self.enable_camera_sensors = self.cfg["env"]["enable_camera_sensors"]
-
-        super().__init__(cfg=self.cfg, enable_camera_sensors=self.enable_camera_sensors)
+        super().__init__(cfg=self.cfg)
 
         self.dt = self.sim_params.dt
 
@@ -152,14 +147,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.envs[0], self.hand_indices[0], "R_hand_base", gymapi.DOMAIN_ENV)
         print("hand_base_rigid_body_index: ", self.hand_base_rigid_body_index)
-
-        self.hand_pos_history = torch.zeros((self.num_envs, 45 * 8 + 1, 3), dtype=torch.float, device=self.device)
-        self.segmentation_object_center_point_x = torch.zeros((self.num_envs, 1), dtype=torch.int, device=self.device)
-        self.segmentation_object_center_point_y = torch.zeros((self.num_envs, 1), dtype=torch.int, device=self.device)
-        self.segmentation_object_point_num = torch.zeros((self.num_envs, 1), dtype=torch.int, device=self.device)
-
-        self.meta_rew_buf = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.float)
 
         self.perturb_direction = torch_rand_float(-1, 1, (self.num_envs, 6), device=self.device).squeeze(-1)
         self.segmentation_target_init_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
@@ -467,28 +454,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         self.segmentation_id_list = []
 
-        self.cameras = []
-        self.camera_tensors = []
-        self.camera_seg_tensors = []
-        self.camera_view_matrixs = []
-        self.camera_proj_matrixs = []
-
-        self.camera_props = gymapi.CameraProperties()
-        self.camera_props.width = 128
-        self.camera_props.height = 128
-        self.camera_props.enable_tensors = True
-
-        self.env_origin = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float)
-        self.camera_u = torch.arange(0, self.camera_props.width, device=self.device)
-        self.camera_v = torch.arange(0, self.camera_props.height, device=self.device)
-
-        self.camera_v2, self.camera_u2 = torch.meshgrid(self.camera_v, self.camera_u, indexing='ij')
-
-        self.camera_offset_quat = gymapi.Quat().from_euler_zyx(0, - 3.141 + 0.5, 1.571)
-        self.camera_offset_quat = to_torch([self.camera_offset_quat.x, self.camera_offset_quat.y, self.camera_offset_quat.z, self.camera_offset_quat.w], device=self.device)
-        self.camera_offset_pos = to_torch([0.03, 0.107 - 0.098, 0.067 + 0.107], device=self.device)
-
-
         num_per_row = int(np.sqrt(self.num_envs))
         for i in range(self.num_envs):
             # create env instance
@@ -572,32 +537,10 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             self.gym.set_rigid_body_color(env_ptr, extra_lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
             self.extra_object_indices.append(extra_object_idx)
 
-            if self.enable_camera_sensors:
-                camera_handle = self.gym.create_camera_sensor(env_ptr, self.camera_props)
-                self.gym.set_camera_location(camera_handle, env_ptr, gymapi.Vec3(0.35, 0.19, 1.0), gymapi.Vec3(0.2, 0.19, 0))
-                camera_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_ptr, camera_handle, gymapi.IMAGE_COLOR)
-                torch_cam_tensor = gymtorch.wrap_tensor(camera_tensor)
-                camera_seg_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_ptr, camera_handle, gymapi.IMAGE_SEGMENTATION)
-                torch_cam_seg_tensor = gymtorch.wrap_tensor(camera_seg_tensor)
-
-                cam_vinv = torch.inverse((torch.tensor(self.gym.get_camera_view_matrix(self.sim, env_ptr, camera_handle)))).to(self.device)
-                cam_proj = torch.tensor(self.gym.get_camera_proj_matrix(self.sim, env_ptr, camera_handle), device=self.device)
-
             self.mount_rigid_body_index = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "Link7", gymapi.DOMAIN_ENV)
 
             if self.aggregate_mode > 0:
                 self.gym.end_aggregate(env_ptr)
-
-            if self.enable_camera_sensors:
-                origin = self.gym.get_env_origin(env_ptr)
-                self.env_origin[i][0] = origin.x
-                self.env_origin[i][1] = origin.y
-                self.env_origin[i][2] = origin.z
-                self.camera_tensors.append(torch_cam_tensor)
-                self.camera_seg_tensors.append(torch_cam_seg_tensor)
-                self.camera_view_matrixs.append(cam_vinv)
-                self.camera_proj_matrixs.append(cam_proj)
-                self.cameras.append(camera_handle)
 
             self.envs.append(env_ptr)
             self.arm_hands.append(arm_hand_actor)
@@ -605,8 +548,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.emergence_reward = torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
         self.emergence_pixel = torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
         self.last_emergence_pixel = torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
-
-        self.heap_movement_penalty= torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
 
         # Acquire specific links.
         sensor_handles = [0, 1, 2, 3, 4, 5, 6]
@@ -627,25 +568,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
     def compute_reward(self):
         self.rew_buf[:], self.reset_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
             self.reset_buf, self.progress_buf, self.successes, self.consecutive_successes, self.contacts, self.segmentation_target_init_pos,
-            self.max_episode_length, self.segmentation_target_pos, self.emergence_reward, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos, self.heap_movement_penalty,
-            self.actions, self.av_factor, self.init_heap_movement_penalty
+            self.max_episode_length, self.segmentation_target_pos, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos,
+            self.actions, self.av_factor
         )
-
-        self.meta_rew_buf += self.rew_buf[:].clone()
-
-        for i in range(8):
-            self.extras["multi_object_point_num_{}".format(i)] = 0
-
-        for i in range(self.num_envs):
-            object_i = i % 8
-            self.extras["multi_object_point_num_{}".format(object_i)] += self.segmentation_object_point_num[i]
-
-        for i in range(8):
-            self.extras["multi_object_point_num_{}".format(i)] / 1024 * 8
-
-        self.extras['emergence_reward'] = self.emergence_reward
-        self.extras['heap_movement_penalty'] = self.heap_movement_penalty
-        self.extras['meta_reward'] = self.meta_rew_buf
 
         self.total_steps += 1
 
@@ -655,46 +580,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_jacobian_tensors(self.sim)
-
-        if self.enable_camera_sensors and self.progress_buf[0] >= self.max_episode_length - 1:
-            pos = self.arm_hand_default_dof_pos
-            self.arm_hand_dof_pos[:, 0:self.num_arm_hand_dofs] = pos[0:self.num_arm_hand_dofs]
-            self.arm_hand_dof_vel[:, :] = self.arm_hand_dof_default_vel
-            self.prev_targets[:, :self.num_arm_hand_dofs] = pos
-            self.cur_targets[:, :self.num_arm_hand_dofs] = pos
-
-            self.gym.set_dof_state_tensor_indexed(self.sim,
-                                                gymtorch.unwrap_tensor(self.dof_state),
-                                                gymtorch.unwrap_tensor(self.hand_indices.to(torch.int32)), self.num_envs)
-
-            for i in range(1):
-                self.render()
-                self.gym.simulate(self.sim)
-
-            self.render_for_camera()
-            self.gym.fetch_results(self.sim, True)
-
-            self.gym.refresh_dof_state_tensor(self.sim)
-            self.gym.refresh_actor_root_state_tensor(self.sim)
-            self.gym.refresh_rigid_body_state_tensor(self.sim)
-            self.gym.refresh_jacobian_tensors(self.sim)
-            self.gym.render_all_camera_sensors(self.sim)
-            self.gym.start_access_image_tensors(self.sim)
-
-            self.compute_emergence_reward(self.camera_tensors, self.camera_seg_tensors, segmentation_id_list=self.segmentation_id_list)
-            self.all_lego_brick_pos = self.root_state_tensor[self.lego_indices[:].view(-1), 0:3].clone().view(self.num_envs, -1, 3)
-            self.compute_heap_movement_penalty(self.all_lego_brick_pos)
-
-            # for i in range(1):
-            camera_rgba_image = self.camera_rgb_visulization(self.camera_tensors, env_id=0, is_depth_image=False)
-            camera_seg_image = self.camera_segmentation_visulization(self.camera_tensors, self.camera_seg_tensors, env_id=0, is_depth_image=False)
-
-            cv2.namedWindow("DEBUG_RGB_VIS", 0)
-            cv2.namedWindow("DEBUG_SEG_VIS", 0)
-
-            cv2.imshow("DEBUG_RGB_VIS", camera_rgba_image)
-            cv2.imshow("DEBUG_SEG_VIS", camera_seg_image)
-            cv2.waitKey(1)
 
         self.hand_base_pose = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:7]
         self.hand_base_pos = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3]
@@ -712,8 +597,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.hand_base_rot = self.rigid_body_states[:, self.hand_base_rigid_body_index, 3:7]
         self.hand_base_linvel = self.rigid_body_states[:, self.hand_base_rigid_body_index, 7:10]
         self.hand_base_angvel = self.rigid_body_states[:, self.hand_base_rigid_body_index, 10:13]
-
-        self.hand_pos_history[:, self.progress_buf[0] - 1, :] = self.hand_base_pos.clone()
 
         self.segmentation_target_pose = self.root_state_tensor[self.lego_segmentation_indices, 0:7]
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]
@@ -761,11 +644,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.mount_pos = self.rigid_body_states[:, self.mount_rigid_body_index, 0:3]
         self.mount_rot = self.rigid_body_states[:, self.mount_rigid_body_index, 3:7]
 
-        self.q_camera, self.p_camera = tf_combine(self.mount_rot, self.mount_pos, self.camera_offset_quat.repeat(self.num_envs, 1), self.camera_offset_pos.repeat(self.num_envs, 1))
-        self.q_camera_inv, self.p_camera_inv = tf_inverse(self.q_camera, self.p_camera)
-
-        self.camera_view_segmentation_target_rot, self.camera_view_segmentation_target_pos = tf_combine(self.q_camera_inv, self.p_camera_inv, self.segmentation_target_rot, self.segmentation_target_pos)
-
         contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
         contacts = contacts[:, self.sensor_handle_indices, :] # 12
         contacts = torch.norm(contacts, dim=-1)
@@ -798,9 +676,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         if self.asymmetric_obs:
             self.compute_contact_asymmetric_observations()
 
-        if self.enable_camera_sensors and self.progress_buf[0] % self.hand_reset_step == 0 and self.progress_buf[0] != 0:
-            self.gym.end_access_image_tensors(self.sim)
-
     def compute_contact_asymmetric_observations(self):
         self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
                                                             self.arm_hand_dof_lower_limits[0:19],
@@ -817,19 +692,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.states_buf[:, 81:88] = self.hand_base_pose
 
         self.states_buf[:, 88:95] = self.segmentation_target_pose
-
-        self.states_buf[:, 96:99] = self.hand_pos_history_0
-        self.states_buf[:, 99:102] = self.hand_pos_history_1
-        self.states_buf[:, 102:105] = self.hand_pos_history_2
-        self.states_buf[:, 105:108] = self.hand_pos_history_3
-        self.states_buf[:, 108:111] = self.hand_pos_history_4
-        self.states_buf[:, 111:114] = self.hand_pos_history_5
-        self.states_buf[:, 114:117] = self.hand_pos_history_6
-        self.states_buf[:, 117:120] = self.hand_pos_history_7
-
-        self.states_buf[:, 120:121] = self.segmentation_object_center_point_x / 128
-        self.states_buf[:, 121:122] = self.segmentation_object_center_point_y / 128
-        self.states_buf[:, 122:123] = self.segmentation_object_point_num / 100
 
         self.states_buf[:, 123:126] = self.hand_base_linvel
         self.states_buf[:, 126:129] = self.hand_base_angvel
@@ -868,41 +730,10 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         
         self.obs_buf[:, 43:56] = self.actions[:, :]
 
-        for i in range(self.num_envs):
-            self.segmentation_object_point_list = torch.nonzero(torch.where(self.camera_seg_tensors[i] == self.segmentation_id_list[i], self.camera_seg_tensors[i], torch.zeros_like(self.camera_seg_tensors[i])))
-            self.segmentation_object_point_list = self.segmentation_object_point_list.float()
-            if self.segmentation_object_point_list.shape[0] > 0:
-                self.segmentation_object_center_point_x[i] = int(torch.mean(self.segmentation_object_point_list[:, 0]))
-                self.segmentation_object_center_point_y[i] = int(torch.mean(self.segmentation_object_point_list[:, 1]))
-            else:
-                self.segmentation_object_center_point_x[i] = 0
-                self.segmentation_object_center_point_y[i] = 0
-            
-            self.segmentation_object_point_num[i] = self.segmentation_object_point_list.shape[0]
 
-        # self.obs_buf[:, 62:63] = self.segmentation_object_center_point_x / 128
-        # self.obs_buf[:, 63:64] = self.segmentation_object_center_point_y / 128
-        # self.obs_buf[:, 64:65] = self.segmentation_object_point_num / 100
-
-    # default robot pose: [0.00, 0.782, -1.087, 3.487, 2.109, -1.415]
     def reset_idx(self, env_ids):
         if self.randomize:
             self.apply_randomizations(self.randomization_params)
-
-        # segmentation_object_success_threshold = [100, 100, 75, 100, 100, 150, 150, 100]
-        segmentation_object_success_threshold = [20, 20, 15, 20, 20, 30, 30, 20]
-
-        if self.total_steps > 0:
-            self.record_8_type = [0, 0, 0, 0, 0, 0, 0, 0]
-            for i in range(self.num_envs):
-                object_idx = i % 8
-                if self.segmentation_object_point_num[i] > segmentation_object_success_threshold[object_idx]:
-                    self.record_8_type[object_idx] += 1 
-
-            for i in range(8):
-                self.record_8_type[i] /= (self.num_envs / 8)
-            print("insert_success_rate_index: ", self.record_8_type)
-            print("insert_success_rate: ", sum(self.record_8_type) / 8)
 
         # generate random values
         self.perturb_direction[env_ids] = torch_rand_float(-1, 1, (len(env_ids), 6), device=self.device).squeeze(-1)
@@ -954,7 +785,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
         self.successes[env_ids] = 0
-        self.meta_rew_buf[env_ids] = 0
 
     def post_reset(self, env_ids, hand_indices, rand_floats):
         # step physics and render each frame
@@ -964,44 +794,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         
         self.render_for_camera()
         self.gym.fetch_results(self.sim, True)
-
-        if self.enable_camera_sensors:
-            self.gym.refresh_dof_state_tensor(self.sim)
-            self.gym.refresh_actor_root_state_tensor(self.sim)
-            self.gym.refresh_rigid_body_state_tensor(self.sim)
-            self.gym.refresh_jacobian_tensors(self.sim)
-            self.gym.render_all_camera_sensors(self.sim)
-            self.gym.start_access_image_tensors(self.sim)
-
-            camera_rgba_image = self.camera_rgb_visulization(self.camera_tensors, env_id=0, is_depth_image=False)
-            camera_seg_image = self.camera_segmentation_visulization(self.camera_tensors, self.camera_seg_tensors, env_id=0, is_depth_image=False)
-
-            self.compute_emergence_reward(self.camera_tensors, self.camera_seg_tensors, segmentation_id_list=self.segmentation_id_list)
-            self.last_all_lego_brick_pos = self.root_state_tensor[self.lego_indices[:], 0:3].clone()
-            
-            self.hand_pos_history = torch.zeros_like(self.hand_pos_history)
-            self.hand_pos_history_0 = torch.mean(self.hand_pos_history[:, 0*self.hand_reset_step:1*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_1 = torch.mean(self.hand_pos_history[:, 1*self.hand_reset_step:2*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_2 = torch.mean(self.hand_pos_history[:, 2*self.hand_reset_step:3*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_3 = torch.mean(self.hand_pos_history[:, 3*self.hand_reset_step:4*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_4 = torch.mean(self.hand_pos_history[:, 4*self.hand_reset_step:5*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_5 = torch.mean(self.hand_pos_history[:, 5*self.hand_reset_step:6*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_6 = torch.mean(self.hand_pos_history[:, 6*self.hand_reset_step:7*self.hand_reset_step, :], dim=1, keepdim=False)
-            self.hand_pos_history_7 = torch.mean(self.hand_pos_history[:, 7*self.hand_reset_step:8*self.hand_reset_step, :], dim=1, keepdim=False)
-            cv2.namedWindow("DEBUG_RGB_VIS", 0)
-            cv2.namedWindow("DEBUG_SEG_VIS", 0)
-
-            cv2.imshow("DEBUG_RGB_VIS", camera_rgba_image)
-            cv2.imshow("DEBUG_SEG_VIS", camera_seg_image)
-            cv2.waitKey(1)
-
-            self.gym.end_access_image_tensors(self.sim)
-
-            self.all_lego_brick_pos = self.root_state_tensor[self.lego_indices[:].view(-1), 0:3].clone().view(self.num_envs, -1, 3)
-            self.init_heap_movement_penalty = torch.where(abs(self.all_lego_brick_pos[:self.num_envs, :, 0] - 1) > 0.25,
-                                                torch.where(abs(self.all_lego_brick_pos[:self.num_envs, :, 1]) > 0.35, torch.ones_like(self.all_lego_brick_pos[:self.num_envs, :, 0]), torch.zeros_like(self.all_lego_brick_pos[:self.num_envs, :, 0])), torch.zeros_like(self.all_lego_brick_pos[:self.num_envs, :, 0]))
-            
-            self.init_heap_movement_penalty = torch.sum(self.init_heap_movement_penalty, dim=1, keepdim=False)
 
         self.arm_hand_dof_pos[env_ids, 0:19] = self.arm_hand_prepare_dof_poses
         self.prev_targets[env_ids, :self.num_arm_hand_dofs] = self.arm_hand_prepare_dof_poses
@@ -1107,58 +899,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.compute_observations()
         self.compute_reward()
 
-        if self.viewer and self.debug_viz:
-            # draw axes on target object
-            self.gym.clear_lines(self.viewer)
-            self.gym.refresh_rigid_body_state_tensor(self.sim)
-
-            for i in range(self.num_envs):
-                self.add_debug_lines(self.envs[i], self.hand_base_pos[i], self.hand_base_rot[i])
-
-    def add_debug_lines(self, env, pos, rot):
-        posx = (pos + quat_apply(rot, to_torch([1, 0, 0], device=self.device) * 0.2)).cpu().numpy()
-        posy = (pos + quat_apply(rot, to_torch([0, 1, 0], device=self.device) * 0.2)).cpu().numpy()
-        posz = (pos + quat_apply(rot, to_torch([0, 0, 1], device=self.device) * 0.2)).cpu().numpy()
-
-        p0 = pos.cpu().numpy()
-        self.gym.add_lines(self.viewer, env, 1, [p0[0], p0[1], p0[2], posx[0], posx[1], posx[2]], [0.85, 0.1, 0.1])
-        self.gym.add_lines(self.viewer, env, 1, [p0[0], p0[1], p0[2], posy[0], posy[1], posy[2]], [0.1, 0.85, 0.1])
-        self.gym.add_lines(self.viewer, env, 1, [p0[0], p0[1], p0[2], posz[0], posz[1], posz[2]], [0.1, 0.1, 0.85])
-
-    def camera_rgb_visulization(self, camera_tensors, env_id=0, is_depth_image=False):
-        torch_rgba_tensor = camera_tensors[env_id].clone()
-        camera_image = torch_rgba_tensor.cpu().numpy()
-        camera_image = cv2.cvtColor(camera_image, cv2.COLOR_BGR2RGB)
-        
-        return camera_image
-
-    def camera_segmentation_visulization(self, camera_tensors, camera_seg_tensors, segmentation_id=0, env_id=0, is_depth_image=False):
-        torch_rgba_tensor = camera_tensors[env_id].clone()
-        torch_seg_tensor = camera_seg_tensors[env_id].clone()
-        torch_rgba_tensor[torch_seg_tensor != self.segmentation_id_list[env_id]] = 0
-
-        camera_image = torch_rgba_tensor.cpu().numpy()
-        camera_image = cv2.cvtColor(camera_image, cv2.COLOR_BGR2RGB)
-
-        return camera_image
-
-    def compute_emergence_reward(self, camera_tensors, camera_seg_tensors, segmentation_id_list=0):
-        for i in range(self.num_envs):
-            torch_seg_tensor = camera_seg_tensors[i]
-            self.emergence_pixel[i] = torch_seg_tensor[torch_seg_tensor == segmentation_id_list[i]].shape[0]
-
-        self.emergence_reward = (self.emergence_pixel - self.last_emergence_pixel) * 5
-        self.last_emergence_pixel = self.emergence_pixel.clone()
-
-    def compute_heap_movement_penalty(self, all_lego_brick_pos):
-        self.heap_movement_penalty = torch.where(abs(all_lego_brick_pos[:self.num_envs, :, 0] - 1) > 0.25,
-                                            torch.where(abs(all_lego_brick_pos[:self.num_envs, :, 1]) > 0.35, torch.ones_like(all_lego_brick_pos[:self.num_envs, :, 0]), torch.zeros_like(all_lego_brick_pos[:self.num_envs, :, 0])), torch.zeros_like(all_lego_brick_pos[:self.num_envs, :, 0]))
-        
-        self.heap_movement_penalty = torch.sum(self.heap_movement_penalty, dim=1, keepdim=False)
-        # self.heap_movement_penalty = torch.where(self.emergence_reward < 0.05, torch.mean(torch.norm(all_lego_brick_pos - last_all_lego_brick_pos, p=2, dim=-1), dim=-1, keepdim=False), torch.zeros_like(self.heap_movement_penalty))
-        
-        self.last_all_lego_brick_pos = self.all_lego_brick_pos.clone()
-
     def draw_point(
         self,
         env,
@@ -1206,8 +946,8 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
 def compute_hand_reward(
     reset_buf, progress_buf, successes, consecutive_successes, arm_contacts, segmentation_target_init_pos,
-    max_episode_length: float, segmentation_target_pos, emergence_reward, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos, heap_movement_penalty,
-    actions, av_factor: float, init_heap_movement_penalty
+    max_episode_length: float, segmentation_target_pos, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos,
+    actions, av_factor: float
 ):
     arm_hand_finger_dist = (torch.norm(segmentation_target_pos - arm_hand_if_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_mf_pos, p=2, dim=-1)
                             + torch.norm(segmentation_target_pos - arm_hand_rf_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_pf_pos, p=2, dim=-1)
@@ -1218,19 +958,12 @@ def compute_hand_reward(
 
     arm_contacts_penalty = torch.sum(arm_contacts, dim=-1)
 
-    # Total rewad is: position distance + orientation alignment + action regularization + success bonus + fall penalty
-    success_bonus = torch.zeros_like(emergence_reward)
-
+    # Total reward is: position distance + orientation alignment + action regularization + success bonus + fall penalty
     object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 1000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 1000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 1000
-    heap_movement_penalty = torch.where(progress_buf >= (max_episode_length - 1), torch.clamp(heap_movement_penalty - init_heap_movement_penalty, min=0, max=15), torch.zeros_like(heap_movement_penalty))
-
-    emergence_reward *= object_up_reward / 10
-    reward = dist_rew - arm_contacts_penalty + success_bonus - action_penalty + object_up_reward
+    reward = dist_rew - arm_contacts_penalty - action_penalty + object_up_reward
 
     if reward[0] == 0:
         print("dist_rew: ", dist_rew[0])
-        print("success_bonus: ", success_bonus[0])
-        print("emergence_reward: ", emergence_reward[0])
         print("object_up_reward: ",  object_up_reward[0])
 
     # Fall penalty: distance to the goal is larger than a threshold

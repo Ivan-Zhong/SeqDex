@@ -4,9 +4,6 @@ env:
   numEnvs: 1
   envSpacing: 1.25
   episodeLength: 75
-  handResetStep: 45
-  enableDebugVis: False
-  enable_camera_sensors: True
   aggregateMode: 1
 
   actionsMovingAverage: 0.6
