@@ -110,7 +110,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.num_bodies = self.rigid_body_states.shape[1]
 
         self.root_state_tensor = gymtorch.wrap_tensor(actor_root_state_tensor).view(-1, 13)
-        self.all_lego_brick_pos_tensors = []
         self.contact_tensor = gymtorch.wrap_tensor(contact_tensor).view(self.num_envs, -1)
         print("Contact Tensor Dimension", self.contact_tensor.shape)
 
@@ -241,7 +240,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         # Put objects in the scene.
         arm_hand_start_pose = gymapi.Transform()
-        arm_hand_start_pose.p = gymapi.Vec3(-0.35, 0.0, 0.6)
+        arm_hand_start_pose.p = gymapi.Vec3(-0.25, 0.0, 0.6)
         arm_hand_start_pose.r = gymapi.Quat().from_euler_zyx(0, 0, 0.0)
 
         # create table asset
@@ -421,8 +420,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.lego_segmentation_indices = []
         self.extra_object_indices = []
 
-        self.segmentation_id_list = []
-
         num_per_row = int(np.sqrt(self.num_envs))
         for i in range(self.num_envs):
             # create env instance
@@ -470,9 +467,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             color_map = [[0.8, 0.64, 0.2], [0.13, 0.54, 0.13], [0, 0.4, 0.8], [1, 0.54, 0], [0.69, 0.13, 0.13], [0.69, 0.13, 0.13], [0, 0.4, 0.8], [0.8, 0.64, 0.2]]
             lego_idx = []
             self.segmentation_id = i % 8
-            # self.segmentation_id = 6
-            if self.segmentation_id in [3, 4, 7]:
-                self.segmentation_id = 0
                 
             for lego_i, lego_asset in enumerate(lego_assets):
                 lego_handle = self.gym.create_actor(env_ptr, lego_asset, lego_start_poses[lego_i], "lego_{}".format(lego_i), i, 0, lego_i + 1)
@@ -481,18 +475,17 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                                             0, 0, 0, 0, 0, 0])
                 idx = self.gym.get_actor_index(env_ptr, lego_handle, gymapi.DOMAIN_SIM)
                 if lego_i == self.segmentation_id:
-                    self.segmentation_id_list.append(lego_i + 1)
                     self.lego_segmentation_indices.append(idx)
 
                 lego_idx.append(idx)
                 lego_body_props = self.gym.get_actor_rigid_body_properties(env_ptr, lego_handle)
                 for lego_body_prop in lego_body_props:
-                    if flat_lego_end > lego_i > flat_lego_begin:
+                    if flat_lego_end > lego_i >= flat_lego_begin:
                         lego_body_prop.mass *= 1
                 self.gym.set_actor_rigid_body_properties(env_ptr, lego_handle, lego_body_props)
 
                 color = color_map[lego_i % 8]
-                if flat_lego_end > lego_i > flat_lego_begin:
+                if flat_lego_end > lego_i >= flat_lego_begin:
                     color = color_map[random.randint(0, 7)]
                 self.gym.set_rigid_body_color(env_ptr, lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(color[0], color[1], color[2]))
             self.lego_indices.append(lego_idx)
@@ -601,8 +594,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             else:
                 self.gym.set_rigid_body_color(
                             self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
-
-        self.compute_observations()
+        
+        self.compute_contact_observations()
+        self.compute_contact_asymmetric_observations()
 
     def compute_contact_asymmetric_observations(self):
         self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
@@ -617,12 +611,8 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.states_buf[:, 55:58] = self.arm_hand_th_pos
 
         self.states_buf[:, 58:71] = self.actions
-        self.states_buf[:, 81:88] = self.hand_base_pose
 
         self.states_buf[:, 88:95] = self.segmentation_target_pose
-
-        self.states_buf[:, 123:126] = self.hand_base_linvel
-        self.states_buf[:, 126:129] = self.hand_base_angvel
 
         self.states_buf[:, 129:133] = self.arm_hand_if_rot  
         self.states_buf[:, 133:136] = self.arm_hand_if_linvel
@@ -682,6 +672,12 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 1] = 0.19 + rand_floats[env_ids, 0] * 0.15
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 2] = 0.9
 
+        lego_ind = self.lego_indices[env_ids].view(-1).to(torch.int32)
+
+        self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                     gymtorch.unwrap_tensor(self.root_state_tensor),
+                                                     gymtorch.unwrap_tensor(lego_ind), len(lego_ind))
+
         # reset shadow hand
         pos = self.arm_hand_default_dof_pos
         self.arm_hand_dof_pos[env_ids, 0:19] = pos[0:19]
@@ -698,12 +694,12 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                                               gymtorch.unwrap_tensor(self.dof_state),
                                               gymtorch.unwrap_tensor(hand_indices), len(env_ids))
 
-        self.post_reset(env_ids, hand_indices, rand_floats)
+        self.post_reset(env_ids, hand_indices)
 
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
 
-    def post_reset(self, env_ids, hand_indices, rand_floats):
+    def post_reset(self, env_ids, hand_indices):
         # step physics and render each frame
         for i in range(60):
             self.render()
