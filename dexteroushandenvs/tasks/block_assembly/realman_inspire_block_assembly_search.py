@@ -58,8 +58,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
         self.stack_obs = 3
 
-        self.obs_type = "partial_contact"
-        self.asymmetric_obs = True
         self.num_observations = 62
         self.num_states = 188
         self.num_actions = 13
@@ -87,7 +85,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
         rigid_body_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
         contact_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)
-        self.jacobian_tensor = gymtorch.wrap_tensor(self.gym.acquire_jacobian_tensor(self.sim, "hand"))
 
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -123,10 +120,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
 
-        self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.envs[0], self.hand_indices[0], "R_hand_base", gymapi.DOMAIN_ENV)
-        print("hand_base_rigid_body_index: ", self.hand_base_rigid_body_index)
-
-        self.perturb_direction = torch_rand_float(-1, 1, (self.num_envs, 6), device=self.device).squeeze(-1)
         self.segmentation_target_init_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
         self.segmentation_target_init_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
@@ -176,7 +169,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
         if self.physics_engine == gymapi.SIM_PHYSX:
             asset_options.use_physx_armature = True
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE  # ???
         arm_hand_asset = self.gym.load_asset(self.sim, asset_root, arm_hand_asset_file, asset_options)
 
         self.num_arm_hand_bodies = self.gym.get_asset_rigid_body_count(arm_hand_asset)
@@ -213,7 +206,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.arm_hand_dof_upper_limits = []
         self.arm_hand_dof_default_pos = []
         self.arm_hand_dof_default_vel = []
-        self.sensors = []
 
         arm_hand_dof_lower_limits_list = [-3.1, -2.268, -3.1, -2.355, -3.1, -2.233, -6.28]
         arm_hand_dof_upper_limits_list = [3.1, 2.268, 3.1, 2.355, 3.1, 2.233, 6.28]
@@ -235,7 +227,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                 self.arm_hand_dof_default_pos.append(0.0)
             self.arm_hand_dof_default_vel.append(0.0)
 
-            arm_hand_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
             if i < 7:
                 arm_hand_dof_props['stiffness'][i] = arm_hand_dof_stiffness_list[i]
                 arm_hand_dof_props['effort'][i] = arm_hand_dof_effort_list[i]
@@ -523,10 +514,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             self.envs.append(env_ptr)
             self.arm_hands.append(arm_hand_actor)
 
-        self.emergence_reward = torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
-        self.emergence_pixel = torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
-        self.last_emergence_pixel = torch.zeros_like(self.rew_buf, device=self.device, dtype=torch.float)
-
         # Acquire specific links.
         sensor_handles = [0, 1, 2, 3, 4, 5, 6]
         self.sensor_handle_indices = to_torch(sensor_handles, dtype=torch.int64)
@@ -555,24 +542,9 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
-        self.gym.refresh_jacobian_tensors(self.sim)
-
-        self.hand_base_pose = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:7]
-        self.hand_base_pos = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3]
-        self.hand_base_rot = self.rigid_body_states[:, self.hand_base_rigid_body_index, 3:7]
-        self.hand_base_linvel = self.rigid_body_states[:, self.hand_base_rigid_body_index, 7:10]
-        self.hand_base_angvel = self.rigid_body_states[:, self.hand_base_rigid_body_index, 10:13]
 
         self.robot_base_pos = self.root_state_tensor[self.hand_indices, 0:3]
         self.robot_base_rot = self.root_state_tensor[self.hand_indices, 3:7]
-        self.q_robot_base_inv, self.p_robot_base_inv = tf_inverse(self.robot_base_rot, self.robot_base_pos)
-        self.hand_base_view_hand_rot, self.hand_base_view_hand_pos = tf_combine(self.q_robot_base_inv, self.p_robot_base_inv, self.hand_base_rot, self.hand_base_pos)
-
-        self.hand_base_pose = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:7]
-        self.hand_base_pos = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3]
-        self.hand_base_rot = self.rigid_body_states[:, self.hand_base_rigid_body_index, 3:7]
-        self.hand_base_linvel = self.rigid_body_states[:, self.hand_base_rigid_body_index, 7:10]
-        self.hand_base_angvel = self.rigid_body_states[:, self.hand_base_rigid_body_index, 10:13]
 
         self.segmentation_target_pose = self.root_state_tensor[self.lego_segmentation_indices, 0:7]
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]
@@ -594,6 +566,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.arm_hand_rf_rot = self.rigid_body_states[:, self.fingertip_handles[2], 3:7]
         self.arm_hand_rf_linvel = self.rigid_body_states[:, self.fingertip_handles[2], 7:10]
         self.arm_hand_rf_angvel = self.rigid_body_states[:, self.fingertip_handles[2], 10:13]
+
         self.arm_hand_pf_pos = self.rigid_body_states[:, self.fingertip_handles[3], 0:3]
         self.arm_hand_pf_rot = self.rigid_body_states[:, self.fingertip_handles[3], 3:7]
         self.arm_hand_pf_linvel = self.rigid_body_states[:, self.fingertip_handles[3], 7:10]
@@ -610,15 +583,11 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.arm_hand_pf_state = self.rigid_body_states[:, self.fingertip_handles[3], 0:13]
         self.arm_hand_th_state = self.rigid_body_states[:, self.fingertip_handles[4], 0:13]
 
-        self.arm_hand_if_pos = self.arm_hand_if_pos + quat_apply(self.arm_hand_if_rot[:], to_torch([0, 0, 1], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_mf_pos = self.arm_hand_mf_pos + quat_apply(self.arm_hand_mf_rot[:], to_torch([0, 0, 1], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_rf_pos = self.arm_hand_rf_pos + quat_apply(self.arm_hand_rf_rot[:], to_torch([0, 0, 1], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_pf_pos = self.arm_hand_pf_pos + quat_apply(self.arm_hand_pf_rot[:], to_torch([0, 0, 1], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_th_pos = self.arm_hand_th_pos + quat_apply(self.arm_hand_th_rot[:], to_torch([0, 0, 1], device=self.device).repeat(self.num_envs, 1) * 0.04)
-
-        # object 6d pose randomization
-        self.mount_pos = self.rigid_body_states[:, self.mount_rigid_body_index, 0:3]
-        self.mount_rot = self.rigid_body_states[:, self.mount_rigid_body_index, 3:7]
+        self.arm_hand_if_pos = self.arm_hand_if_pos + quat_apply(self.arm_hand_if_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.arm_hand_mf_pos = self.arm_hand_mf_pos + quat_apply(self.arm_hand_mf_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.arm_hand_rf_pos = self.arm_hand_rf_pos + quat_apply(self.arm_hand_rf_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.arm_hand_pf_pos = self.arm_hand_pf_pos + quat_apply(self.arm_hand_pf_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.arm_hand_th_pos = self.arm_hand_th_pos + quat_apply(self.arm_hand_th_rot[:], to_torch([0, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.02)
 
         contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
         contacts = contacts[:, self.sensor_handle_indices, :] # 12
@@ -633,24 +602,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                 self.gym.set_rigid_body_color(
                             self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
-        self.perturbation_pos = torch.ones_like(self.actions[:, 0:3]) * self.perturb_direction[:, 0:3]
-        self.perturbation_rot = torch.ones_like(self.actions[:, 0:3]) * self.perturb_direction[:, 3:6]
-
-        if self.obs_type == "full_no_vel":
-            self.compute_full_observations(True)
-        elif self.obs_type == "full":
-            self.compute_full_observations()
-        elif self.obs_type == "full_state":
-            self.compute_full_state()
-        elif self.obs_type == "full_contact":
-            self.compute_contact_observations(True)
-        elif self.obs_type == "partial_contact":
-            self.compute_contact_observations(False)
-        else:
-            print("Unknown observations type!")
-
-        if self.asymmetric_obs:
-            self.compute_contact_asymmetric_observations()
+        self.compute_observations()
 
     def compute_contact_asymmetric_observations(self):
         self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
@@ -695,7 +647,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.states_buf[:, 179:182] = self.segmentation_target_linvel
         self.states_buf[:, 182:185] = self.segmentation_target_angvel
 
-    def compute_contact_observations(self, full_contact=True):        
+    def compute_contact_observations(self):
         self.obs_buf[:, :19] = unscale(self.arm_hand_dof_pos[:, :19],
                                                             self.arm_hand_dof_lower_limits[:19],
                                                             self.arm_hand_dof_upper_limits[:19])
@@ -710,9 +662,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
     def reset_idx(self, env_ids):
         if self.randomize:
             self.apply_randomizations(self.randomization_params)
-
-        # generate random values
-        self.perturb_direction[env_ids] = torch_rand_float(-1, 1, (len(env_ids), 6), device=self.device).squeeze(-1)
 
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
@@ -778,46 +727,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.segmentation_target_init_pos[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0:3].clone()
         self.segmentation_target_init_rot[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 3:7].clone()
 
-        for i in range(0):
-            self.gym.refresh_dof_state_tensor(self.sim)
-            self.gym.refresh_actor_root_state_tensor(self.sim)
-            self.gym.refresh_rigid_body_state_tensor(self.sim)
-            self.gym.refresh_jacobian_tensors(self.sim)
-
-            pos_err = self.segmentation_target_init_pos - self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3]
-            pos_err[:, 2] += 0.24
-            pos_err[:, 0] -= 0.18
-
-            target_rot = quat_from_euler_xyz(self.target_euler[:, 0], self.target_euler[:, 1], self.target_euler[:, 2])
-            rot_err = orientation_error(target_rot, self.rigid_body_states[:, self.hand_base_rigid_body_index, 3:7].clone())
-
-            dpose = torch.cat([pos_err, rot_err], -1).unsqueeze(-1)
-            delta = control_ik(self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :7], self.device, dpose, self.num_envs)  # TODO
-            self.cur_targets[:, :7] = self.arm_hand_dof_pos[:, 0:7] + delta[:, :7]
-        
-            self.prev_targets[:, :] = self.cur_targets[:, :]
-            self.arm_hand_dof_pos[:, :7] = self.cur_targets[:, :7]
-
-            self.arm_hand_dof_pos[env_ids, 7:19] = scale(
-                torch.tensor([0, 0, -1, 0.5, 1, 0, -1, 0.5, 0, 0, -1, 0.5], dtype=torch.float,
-                             device=self.device),
-                self.arm_hand_dof_lower_limits[7:19], self.arm_hand_dof_upper_limits[7:19])
-            self.prev_targets[env_ids, 7:self.num_arm_hand_dofs] = scale(
-                torch.tensor([0, 0, -1, 0.5, 1, 0, -1, 0.5, 0, 0, -1, 0.5], dtype=torch.float,
-                             device=self.device),
-                self.arm_hand_dof_lower_limits[7:19], self.arm_hand_dof_upper_limits[7:19])
-            self.cur_targets[env_ids, 7:self.num_arm_hand_dofs] = scale(
-                torch.tensor([0, 0, -1, 0.5, 1, 0, -1, 0.5, 0, 0, -1, 0.5], dtype=torch.float,
-                             device=self.device),
-                self.arm_hand_dof_lower_limits[7:19], self.arm_hand_dof_upper_limits[7:19])
-
-            self.gym.set_dof_position_target_tensor_indexed(self.sim,
-                                                            gymtorch.unwrap_tensor(self.prev_targets),
-                                                            gymtorch.unwrap_tensor(hand_indices), len(env_ids))
-
-            self.render()
-            self.gym.simulate(self.sim)
-
         print("post_reset finish")
 
     def pre_physics_step(self, actions):
@@ -833,25 +742,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                                                                 self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
         self.cur_targets[:, self.actuated_dof_indices] = self.act_moving_average * self.cur_targets[:,
                                                                                                     self.actuated_dof_indices] + (1.0 - self.act_moving_average) * self.prev_targets[:, self.actuated_dof_indices]
-        self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(self.cur_targets[:, self.actuated_dof_indices],
-                                                                        self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
-                                                                        self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
-            
-        pos_err = self.segmentation_target_pos - self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3]
-        pos_err[:, 2] += 0.24
-        pos_err[:, 0] -= 0.18
-
-        self.now_euler_angle = to_torch([0.0, 3.14, 1.57], dtype=torch.float, device=self.device)
-        target_rot = quat_from_euler_xyz(self.now_euler_angle[0], self.now_euler_angle[1], self.now_euler_angle[2]).repeat((self.num_envs, 1))
-        rot_err = orientation_error(target_rot, self.rigid_body_states[:, self.hand_base_rigid_body_index, 3:7].clone())
-
-        dpose = torch.cat([pos_err, rot_err], -1).unsqueeze(-1)
-        delta = control_ik(self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :7], self.device, dpose, self.num_envs)
-        self.cur_targets[:, :7] = self.arm_hand_dof_pos[:, 0:7] + delta[:, :7]
-
-        self.gym.clear_lines(self.viewer)
-        self.draw_point(self.envs[0], self.segmentation_target_pos[0], target_rot, radius=0.1)
-        self.draw_point(self.envs[0], self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:3], target_rot, radius=0.1, color=[0, 0, 1])
 
         self.cur_targets[:, :] = tensor_clamp(self.cur_targets[:, :],
                                                 self.arm_hand_dof_lower_limits[:],
@@ -941,18 +831,3 @@ def compute_hand_reward(
     resets = torch.where(timed_out, torch.ones_like(resets), resets)
 
     return reward, resets, progress_buf
-
-def orientation_error(desired, current):
-	cc = quat_conjugate(current)
-	q_r = quat_mul(desired, cc)
-	return q_r[:, 0:3] * torch.sign(q_r[:, 3]).unsqueeze(-1)
-
-def control_ik(j_eef, device, dpose, num_envs):
-	# Set controller parameters
-	# IK params
-    damping = 0.05
-    # solve damped least squares
-    j_eef_T = torch.transpose(j_eef, 1, 2)
-    lmbda = torch.eye(6, device=device) * (damping ** 2)
-    u = (j_eef_T @ torch.inverse(j_eef @ j_eef_T + lmbda) @ dpose).view(num_envs, -1)
-    return u
