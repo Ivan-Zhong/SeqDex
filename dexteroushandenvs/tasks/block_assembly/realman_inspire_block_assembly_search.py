@@ -56,10 +56,11 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.max_episode_length = self.cfg["env"]["episodeLength"]
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
+        self.fingertip_adjustment_params = [[[0.15, 0.8, 0.15], 0.05], [[0.15, 0.8, 0.15], 0.055], [[0.2, 0.8, 0.15], 0.05], [[0.2, 0.8, 0.15], 0.045], [[0, 1, 0], 0.02]]
         self.stack_obs = 3
 
-        self.num_observations = 62
-        self.num_states = 188
+        self.num_observations = 116
+        self.num_states = 116
         self.num_actions = 13
         self.up_axis = 'z'
 
@@ -526,7 +527,7 @@ class RealManInspireBlockAssemblySearch(BaseTask):
     def compute_reward(self):
         self.rew_buf[:], self.reset_buf[:], self.progress_buf[:] = compute_hand_reward(
             self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos,
-            self.max_episode_length, self.segmentation_target_pos, self.arm_hand_if_pos, self.arm_hand_mf_pos, self.arm_hand_rf_pos, self.arm_hand_pf_pos, self.arm_hand_th_pos,
+            self.max_episode_length, self.segmentation_target_pos, self.fingertip_poses,
             self.actions
         )
 
@@ -536,51 +537,30 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
-        self.robot_base_pos = self.root_state_tensor[self.hand_indices, 0:3]
-        self.robot_base_rot = self.root_state_tensor[self.hand_indices, 3:7]
+        # Construct states buf: 
+        self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
+                                                            self.arm_hand_dof_lower_limits[0:19],
+                                                            self.arm_hand_dof_upper_limits[0:19])
+        self.states_buf[:, 19:38] = self.vel_obs_scale * self.arm_hand_dof_vel[:, 0:19]
 
-        self.segmentation_target_pose = self.root_state_tensor[self.lego_segmentation_indices, 0:7]
+        # Add finger states
+        id = 38
+        self.fingertip_poses = []
+        for i in range(5):
+            pos = self.rigid_body_states[:, self.fingertip_handles[i], 0:3]
+            rot = self.rigid_body_states[:, self.fingertip_handles[i], 3:7]
+            fingertip_pos = pos + quat_apply(rot[:], to_torch(self.fingertip_adjustment_params[i][0], device=self.device).repeat(self.num_envs, 1) * self.fingertip_adjustment_params[i][1])
+            self.fingertip_poses.append(fingertip_pos)
+            self.states_buf[:, id:id+3] = fingertip_pos
+            self.states_buf[:, id+3:id+13] = self.rigid_body_states[:, self.fingertip_handles[i], 3:13]
+            id += 13
+        
+        self.states_buf[:, id:id + 13] = self.root_state_tensor[self.lego_segmentation_indices, 0:13]
+        
+        # Clone states buf to obs buf
+        self.obs_buf[:, :] = self.states_buf[:, :]
+
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]
-        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7]
-        self.segmentation_target_linvel = self.root_state_tensor[self.lego_segmentation_indices, 7:10]
-        self.segmentation_target_angvel = self.root_state_tensor[self.lego_segmentation_indices, 10:13]
-
-        self.arm_hand_if_pos = self.rigid_body_states[:, self.fingertip_handles[0], 0:3]
-        self.arm_hand_if_rot = self.rigid_body_states[:, self.fingertip_handles[0], 3:7]
-        self.arm_hand_if_linvel = self.rigid_body_states[:, self.fingertip_handles[0], 7:10]
-        self.arm_hand_if_angvel = self.rigid_body_states[:, self.fingertip_handles[0], 10:13]
-
-        self.arm_hand_mf_pos = self.rigid_body_states[:, self.fingertip_handles[1], 0:3]
-        self.arm_hand_mf_rot = self.rigid_body_states[:, self.fingertip_handles[1], 3:7]
-        self.arm_hand_mf_linvel = self.rigid_body_states[:, self.fingertip_handles[1], 7:10]
-        self.arm_hand_mf_angvel = self.rigid_body_states[:, self.fingertip_handles[1], 10:13]
-
-        self.arm_hand_rf_pos = self.rigid_body_states[:, self.fingertip_handles[2], 0:3]
-        self.arm_hand_rf_rot = self.rigid_body_states[:, self.fingertip_handles[2], 3:7]
-        self.arm_hand_rf_linvel = self.rigid_body_states[:, self.fingertip_handles[2], 7:10]
-        self.arm_hand_rf_angvel = self.rigid_body_states[:, self.fingertip_handles[2], 10:13]
-
-        self.arm_hand_pf_pos = self.rigid_body_states[:, self.fingertip_handles[3], 0:3]
-        self.arm_hand_pf_rot = self.rigid_body_states[:, self.fingertip_handles[3], 3:7]
-        self.arm_hand_pf_linvel = self.rigid_body_states[:, self.fingertip_handles[3], 7:10]
-        self.arm_hand_pf_angvel = self.rigid_body_states[:, self.fingertip_handles[3], 10:13]
-
-        self.arm_hand_th_pos = self.rigid_body_states[:, self.fingertip_handles[4], 0:3]
-        self.arm_hand_th_rot = self.rigid_body_states[:, self.fingertip_handles[4], 3:7]
-        self.arm_hand_th_linvel = self.rigid_body_states[:, self.fingertip_handles[4], 7:10]
-        self.arm_hand_th_angvel = self.rigid_body_states[:, self.fingertip_handles[4], 10:13]
-
-        self.arm_hand_if_state = self.rigid_body_states[:, self.fingertip_handles[0], 0:13]
-        self.arm_hand_mf_state = self.rigid_body_states[:, self.fingertip_handles[1], 0:13]
-        self.arm_hand_rf_state = self.rigid_body_states[:, self.fingertip_handles[2], 0:13]
-        self.arm_hand_pf_state = self.rigid_body_states[:, self.fingertip_handles[3], 0:13]
-        self.arm_hand_th_state = self.rigid_body_states[:, self.fingertip_handles[4], 0:13]
-
-        self.arm_hand_if_pos = self.arm_hand_if_pos + quat_apply(self.arm_hand_if_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_mf_pos = self.arm_hand_mf_pos + quat_apply(self.arm_hand_mf_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_rf_pos = self.arm_hand_rf_pos + quat_apply(self.arm_hand_rf_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_pf_pos = self.arm_hand_pf_pos + quat_apply(self.arm_hand_pf_rot[:], to_torch([0.2, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.04)
-        self.arm_hand_th_pos = self.arm_hand_th_pos + quat_apply(self.arm_hand_th_rot[:], to_torch([0, 1, 0], device=self.device).repeat(self.num_envs, 1) * 0.02)
 
         contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
         contacts = contacts[:, self.sensor_handle_indices, :] # 12
@@ -594,60 +574,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             else:
                 self.gym.set_rigid_body_color(
                             self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
-        
-        self.compute_contact_observations()
-        self.compute_contact_asymmetric_observations()
-
-    def compute_contact_asymmetric_observations(self):
-        self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
-                                                            self.arm_hand_dof_lower_limits[0:19],
-                                                            self.arm_hand_dof_upper_limits[0:19])
-        self.states_buf[:, 23:42] = self.vel_obs_scale * self.arm_hand_dof_vel[:, 0:19]
-
-        self.states_buf[:, 43:46] = self.arm_hand_if_pos
-        self.states_buf[:, 46:49] = self.arm_hand_mf_pos
-        self.states_buf[:, 49:52] = self.arm_hand_rf_pos
-        self.states_buf[:, 52:55] = self.arm_hand_pf_pos
-        self.states_buf[:, 55:58] = self.arm_hand_th_pos
-
-        self.states_buf[:, 58:71] = self.actions
-
-        self.states_buf[:, 88:95] = self.segmentation_target_pose
-
-        self.states_buf[:, 129:133] = self.arm_hand_if_rot  
-        self.states_buf[:, 133:136] = self.arm_hand_if_linvel
-        self.states_buf[:, 136:139] = self.arm_hand_if_angvel
-
-        self.states_buf[:, 139:143] = self.arm_hand_mf_rot  
-        self.states_buf[:, 143:146] = self.arm_hand_mf_linvel
-        self.states_buf[:, 146:149] = self.arm_hand_mf_angvel
-
-        self.states_buf[:, 149:153] = self.arm_hand_rf_rot  
-        self.states_buf[:, 153:156] = self.arm_hand_rf_linvel
-        self.states_buf[:, 156:159] = self.arm_hand_rf_angvel
-
-        self.states_buf[:, 159:163] = self.arm_hand_pf_rot  
-        self.states_buf[:, 163:166] = self.arm_hand_pf_linvel
-        self.states_buf[:, 166:169] = self.arm_hand_pf_angvel
-
-        self.states_buf[:, 169:173] = self.arm_hand_th_rot  
-        self.states_buf[:, 173:176] = self.arm_hand_th_linvel
-        self.states_buf[:, 176:179] = self.arm_hand_th_angvel
-
-        self.states_buf[:, 179:182] = self.segmentation_target_linvel
-        self.states_buf[:, 182:185] = self.segmentation_target_angvel
-
-    def compute_contact_observations(self):
-        self.obs_buf[:, :19] = unscale(self.arm_hand_dof_pos[:, :19],
-                                                            self.arm_hand_dof_lower_limits[:19],
-                                                            self.arm_hand_dof_upper_limits[:19])
-    
-        self.obs_buf[:, 30:43] = self.actions[:, :] - unscale(self.arm_hand_dof_pos[:, self.actuated_dof_indices],
-                                                            self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
-                                                            self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
-        
-        self.obs_buf[:, 43:56] = self.actions[:, :]
-
 
     def reset_idx(self, env_ids):
         if self.randomize:
@@ -700,12 +626,12 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.reset_buf[env_ids] = 0
 
     def post_reset(self, env_ids, hand_indices):
-        # step physics and render each frame
-        for i in range(60):
-            self.render()
-            self.gym.simulate(self.sim)
+        # # step physics and render each frame
+        # for i in range(60):
+        #     self.render()
+        #     self.gym.simulate(self.sim)
         
-        self.render_for_camera()
+        # self.render_for_camera()
         self.gym.fetch_results(self.sim, True)
 
         self.arm_hand_dof_pos[env_ids, 0:19] = self.arm_hand_prepare_dof_poses
@@ -800,12 +726,11 @@ class RealManInspireBlockAssemblySearch(BaseTask):
 
 def compute_hand_reward(
     reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos,
-    max_episode_length: float, segmentation_target_pos, arm_hand_if_pos, arm_hand_mf_pos, arm_hand_rf_pos, arm_hand_pf_pos, arm_hand_th_pos,
-    actions
+    max_episode_length: float, segmentation_target_pos, fingertip_poses, actions
 ):
-    arm_hand_finger_dist = (torch.norm(segmentation_target_pos - arm_hand_if_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_mf_pos, p=2, dim=-1)
-                            + torch.norm(segmentation_target_pos - arm_hand_rf_pos, p=2, dim=-1) + torch.norm(segmentation_target_pos - arm_hand_pf_pos, p=2, dim=-1)
-                         + torch.norm(segmentation_target_pos - arm_hand_th_pos, p=2, dim=-1))
+    arm_hand_finger_dist = 0
+    for i in range(5):
+        arm_hand_finger_dist += torch.norm(segmentation_target_pos - fingertip_poses[i], p=2, dim=-1)
     dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
 
     action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005

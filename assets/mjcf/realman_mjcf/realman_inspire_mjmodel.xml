@@ -246,7 +246,7 @@
         <joint joint="R_thumb_PIP_joint" coef="0.00505"/>
         <joint joint="R_thumb_DIP_joint" coef="0.00305" />
     </fixed>
-  </tendon>
+  </tendon> 
 
   <actuator>
     <position name="index_tendon_a" joint="R_index_MCP_joint" class="thumb_base"/>
