@@ -170,9 +170,7 @@ def parse_task(args, cfg, cfg_train, sim_params, agent_index):
                 physics_engine=args.physics_engine,
                 device_type=args.device,
                 device_id=device_id,
-                headless=args.headless,
-                agent_index=agent_index,
-                is_multi_agent=False)
+                headless=args.headless)
         except NameError as e:
             print(e)
             warn_task_name()

@@ -26,29 +26,34 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import sys
 import os
 import math
 import random
 
-import torch
 import numpy as np
-from isaacgym import gymtorch
-from isaacgym import gymapi
+import torch
+from isaacgym import gymapi, gymtorch
 from isaacgym.torch_utils import *
 from scipy.spatial.transform import Rotation as R
 
-from tasks.hand_base.base_task import BaseTask
 
+class RealManInspireBlockAssemblySearch:
 
-class RealManInspireBlockAssemblySearch(BaseTask):
-
-    def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless, agent_index=[[[0, 1, 2, 3, 4, 5]], [[0, 1, 2, 3, 4, 5]]], is_multi_agent=False):
+    def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
 
         self.cfg = cfg
         self.sim_params = sim_params
         self.physics_engine = physics_engine
+        self.device_type = device_type
+        self.device_id = device_id
+        self.device = "cpu"
+        if self.device_type == "cuda" or self.device_type == "GPU":
+            self.device = "cuda" + ":" + str(self.device_id)
+        self.headless = headless
+        self.graphics_device_id = self.device_id
 
-        self.randomize = self.cfg["task"]["randomize"]
+
         self.randomization_params = self.cfg["task"]["randomization_params"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
@@ -59,24 +64,60 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.fingertip_adjustment_params = [[[0.15, 0.8, 0.15], 0.05], [[0.15, 0.8, 0.15], 0.055], [[0.2, 0.8, 0.15], 0.05], [[0.2, 0.8, 0.15], 0.045], [[0, 1, 0], 0.02]]
         self.stack_obs = 3
 
-        self.num_observations = 116
-        self.num_states = 116
+        self.num_observations = 129
+        self.num_states = 129
         self.num_actions = 13
-        self.up_axis = 'z'
 
         self.cfg["env"]["numObservations"] = self.num_observations * self.stack_obs
         self.cfg["env"]["numStates"] = self.num_states * self.stack_obs
         self.cfg["env"]["numActions"] = self.num_actions
 
-        self.cfg["device_type"] = device_type
-        self.cfg["device_id"] = device_id
-        self.cfg["headless"] = headless
 
-        super().__init__(cfg=self.cfg)
+        self.gym = gymapi.acquire_gym()
 
-        self.dt = self.sim_params.dt
+        self.num_envs = self.cfg["env"]["numEnvs"]
+        self.num_obs = self.cfg["env"]["numObservations"]
+        self.num_states = self.cfg["env"].get("numStates", 0)
+        self.num_actions = self.cfg["env"]["numActions"]
 
-        if self.viewer != None:
+        self.control_freq_inv = self.cfg["env"].get("controlFrequencyInv", 1)
+
+        # optimization flags for pytorch JIT
+        torch._C._jit_set_profiling_mode(False)
+        torch._C._jit_set_profiling_executor(False)
+
+        # allocate buffers
+        self.obs_buf = torch.zeros(
+            (self.num_envs, self.num_obs), device=self.device, dtype=torch.float)
+        self.states_buf = torch.zeros(
+            (self.num_envs, self.num_states), device=self.device, dtype=torch.float)
+        self.rew_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.float)
+        self.reset_buf = torch.ones(
+            self.num_envs, device=self.device, dtype=torch.long)
+        self.progress_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.long)
+        self.randomize_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.long)
+        self.extras = {}
+
+        # create envs, sim and viewer
+        self.create_sim()
+        self.gym.prepare_sim(self.sim)
+
+        # todo: read from config
+        self.enable_viewer_sync = True
+        self.viewer = None
+
+        # if running with a viewer, set up keyboard shortcuts and camera
+        if self.headless == False:
+            # subscribe to keyboard shortcuts
+            self.viewer = self.gym.create_viewer(
+                self.sim, gymapi.CameraProperties())
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_ESCAPE, "QUIT")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
             cam_pos = gymapi.Vec3(0.5, -0.1, 1.5)
             cam_target = gymapi.Vec3(-0.7, -0.1, 0.0)
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
@@ -110,6 +151,8 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_tensor).view(self.num_envs, -1, 13)
         self.num_bodies = self.rigid_body_states.shape[1]
 
+        self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.envs[0], self.hand_indices[0], "Link7", gymapi.DOMAIN_ENV)
+
         self.root_state_tensor = gymtorch.wrap_tensor(actor_root_state_tensor).view(-1, 13)
         self.contact_tensor = gymtorch.wrap_tensor(contact_tensor).view(self.num_envs, -1)
         print("Contact Tensor Dimension", self.contact_tensor.shape)
@@ -129,17 +172,19 @@ class RealManInspireBlockAssemblySearch(BaseTask):
         self.target_euler = to_torch([0.0, 3.1415, 1.571], device=self.device).repeat((self.num_envs, 1))
 
     def create_sim(self):
-        self.dt = self.sim_params.dt
-        self.up_axis_idx = self.set_sim_params_up_axis(self.sim_params, self.up_axis)
+        self.sim_params.up_axis = gymapi.UP_AXIS_Z
+        self.sim_params.gravity.x = 0
+        self.sim_params.gravity.y = 0
+        self.sim_params.gravity.z = -9.81
         self.sim_params.physx.max_gpu_contact_pairs = int(self.sim_params.physx.max_gpu_contact_pairs)
-        # self.sim_params.dt = 1./120.
 
-        self.sim = super().create_sim(self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
+        self.sim = self.gym.create_sim(self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
+        if self.sim is None:
+            print("*** Failed to create sim")
+            quit()
+
         self._create_ground_plane()
         self._create_envs()
-
-        if self.randomize:
-            self.apply_randomizations(self.randomization_params)
 
     def _create_ground_plane(self):
         plane_params = gymapi.PlaneParams()
@@ -554,7 +599,12 @@ class RealManInspireBlockAssemblySearch(BaseTask):
             self.states_buf[:, id:id+3] = fingertip_pos
             self.states_buf[:, id+3:id+13] = self.rigid_body_states[:, self.fingertip_handles[i], 3:13]
             id += 13
-        
+
+        # Add Link7 state
+        self.states_buf[:, id:id+13] = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:13]
+        id += 13
+
+        # Add lego target state
         self.states_buf[:, id:id + 13] = self.root_state_tensor[self.lego_segmentation_indices, 0:13]
         
         # Clone states buf to obs buf
@@ -576,9 +626,6 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                             self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
     def reset_idx(self, env_ids):
-        if self.randomize:
-            self.apply_randomizations(self.randomization_params)
-
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
         self.base_pos[env_ids, :] = self.rigid_body_states[env_ids, 0, 0:3] + rand_floats[:, 7:10] * 0.00
@@ -719,6 +766,72 @@ class RealManInspireBlockAssemblySearch(BaseTask):
                 end = points[i + 1]
                 self.gym.add_lines(self.viewer, env, 1, [*start, *end], color)
 
+    def step(self, actions):
+
+        # apply actions
+        self.pre_physics_step(actions)
+
+        self.gym.clear_lines(self.viewer)
+
+        self.draw_point(self.envs[0], self.root_state_tensor[self.lego_segmentation_indices[0], 0:3], self.root_state_tensor[self.lego_segmentation_indices[0], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+
+        # try:
+        #     for env_id in range(min(4, self.num_envs)):
+        #         # Draw point at target position
+        #         self.draw_point(self.envs[env_id], self.root_state_tensor[self.lego_segmentation_indices[env_id], 0:3], self.root_state_tensor[self.lego_segmentation_indices[env_id], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+        #         # Draw points at fingertips
+        #         for finger_i in range(5):
+        #             self.draw_point(self.envs[env_id], self.fingertip_poses[finger_i], torch.tensor([0,0,0,1], dtype=torch.float, device="cuda:0"), ax="xyz", radius=0.03, num_segments=32, color=(0, 1, 0))
+        # except:
+        #     pass
+
+        # self.draw_point(self.envs[1], self.root_state_tensor[self.lego_segmentation_indices[1], 0:3], self.root_state_tensor[self.lego_segmentation_indices[1], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+
+        # for env in self.envs:
+        #     draw_line(gymapi.Vec3(0, 0, 0), gymapi.Vec3(0, 0, 1), gymapi.Vec3(0, 0, 1), self.gym, self.viewer, env)
+        #     draw_line(gymapi.Vec3(0, 0, 0), gymapi.Vec3(0, 1, 0), gymapi.Vec3(0, 1, 0), self.gym, self.viewer, env)
+        #     draw_line(gymapi.Vec3(0, 0, 0), gymapi.Vec3(1, 0, 0), gymapi.Vec3(1, 0, 0), self.gym, self.viewer, env)
+
+        # step physics and render each frame
+        for _ in range(self.control_freq_inv):
+            self.render()
+            self.gym.simulate(self.sim)
+
+        # to fix!
+        if self.device == 'cpu':
+            self.gym.fetch_results(self.sim, True)
+
+        # compute observations, rewards, resets, ...
+        self.post_physics_step()
+
+    def get_states(self):
+        return self.states_buf
+
+    def render(self):
+        if self.viewer:
+            # check for window closed
+            if self.gym.query_viewer_has_closed(self.viewer):
+                sys.exit()          
+
+            # check for keyboard events
+            for evt in self.gym.query_viewer_action_events(self.viewer):
+                if evt.action == "QUIT" and evt.value > 0:
+                    sys.exit()
+                elif evt.action == "toggle_viewer_sync" and evt.value > 0:
+                    self.enable_viewer_sync = not self.enable_viewer_sync
+
+            # fetch results
+            if self.device != 'cpu':
+                self.gym.fetch_results(self.sim, True)
+
+            # step graphics
+            if self.enable_viewer_sync:
+                self.gym.step_graphics(self.sim)
+                self.gym.draw_viewer(self.viewer, self.sim, True)
+            else:
+                self.gym.poll_viewer_events(self.viewer)
+
+
 
 #####################################################################
 ###=========================jit functions=========================###
@@ -731,18 +844,22 @@ def compute_hand_reward(
     arm_hand_finger_dist = 0
     for i in range(5):
         arm_hand_finger_dist += torch.norm(segmentation_target_pos - fingertip_poses[i], p=2, dim=-1)
-    dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
+    # dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
+    dist_rew = arm_hand_finger_dist * (-100)
 
-    action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
+    # action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
+    action_penalty = 0
 
-    arm_contacts_penalty = torch.sum(arm_contacts, dim=-1)
+    # arm_contacts_penalty = torch.sum(arm_contacts, dim=-1) * 50
+    arm_contacts_penalty = 0
 
-    object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 1000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 1000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 1000
+    # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
+    # object_up_reward = (segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2]) * 1000
+    object_up_reward = 0
+    
     reward = dist_rew - arm_contacts_penalty - action_penalty + object_up_reward
 
-    if reward[0] == 0:
-        print("dist_rew: ", dist_rew[0])
-        print("object_up_reward: ",  object_up_reward[0])
+    print(f"Total reward {reward.mean().item():.2f}, dist_rew {dist_rew.mean().item():.2f}, arm_contacts_penalty {arm_contacts_penalty:.2f}, action_penalty {action_penalty:.2f}, object_up_reward {object_up_reward:.2f}")
 
     # Fall penalty: distance to the goal is larger than a threshold
     # Check env termination conditions, including maximum success number

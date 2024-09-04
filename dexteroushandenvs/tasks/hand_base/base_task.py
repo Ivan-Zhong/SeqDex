@@ -133,9 +133,20 @@ class BaseTask():
         # apply actions
         self.pre_physics_step(actions)
 
-        # self.gym.clear_lines(self.viewer)
+        self.gym.clear_lines(self.viewer)
 
-        # self.draw_point(self.envs[0], self.root_state_tensor[self.lego_segmentation_indices[0], 0:3], self.root_state_tensor[self.lego_segmentation_indices[0], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+        self.draw_point(self.envs[0], self.root_state_tensor[self.lego_segmentation_indices[0], 0:3], self.root_state_tensor[self.lego_segmentation_indices[0], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+
+        # try:
+        #     for env_id in range(min(4, self.num_envs)):
+        #         # Draw point at target position
+        #         self.draw_point(self.envs[env_id], self.root_state_tensor[self.lego_segmentation_indices[env_id], 0:3], self.root_state_tensor[self.lego_segmentation_indices[env_id], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+        #         # Draw points at fingertips
+        #         for finger_i in range(5):
+        #             self.draw_point(self.envs[env_id], self.fingertip_poses[finger_i], torch.tensor([0,0,0,1], dtype=torch.float, device="cuda:0"), ax="xyz", radius=0.03, num_segments=32, color=(0, 1, 0))
+        # except:
+        #     pass
+
         # self.draw_point(self.envs[1], self.root_state_tensor[self.lego_segmentation_indices[1], 0:3], self.root_state_tensor[self.lego_segmentation_indices[1], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
 
         # for env in self.envs:
