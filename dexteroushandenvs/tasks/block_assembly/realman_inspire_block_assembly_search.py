@@ -124,13 +124,7 @@ class RealManInspireBlockAssemblySearch:
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
         # create some wrapper tensors for different slices
-        self.arm_hand_default_dof_pos = torch.zeros(self.num_arm_hand_dofs, dtype=torch.float, device=self.device)
-        self.arm_hand_default_dof_pos[:7] = torch.tensor([3.14, 0.6, 0, 0.6, 0., 0.59, -1.571], dtype=torch.float, device=self.device)        
-
-        self.arm_hand_default_dof_pos[7:] = to_torch([0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785], dtype=torch.float, device=self.device)
-
-        self.arm_hand_prepare_dof_poses = torch.zeros((self.num_envs, self.num_arm_hand_dofs), dtype=torch.float, device=self.device)
-        self.arm_hand_prepare_dof_poses[:, :] = to_torch([3.14, 0.6, 0, 0.6, 0., 0.59, -1.571,
+        self.arm_hand_default_dof_pos = to_torch([3.14, 0.6, 0, 0.6, 0., 0.59, -1.571,
              0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785], dtype=torch.float, device=self.device)
 
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
@@ -643,25 +637,13 @@ class RealManInspireBlockAssemblySearch:
         self.reset_buf[env_ids] = 0
 
     def post_reset(self, env_ids, hand_indices):
-        # # step physics and render each frame
-        # for i in range(60):
-        #     self.render()
-        #     self.gym.simulate(self.sim)
+        # step physics and render each frame
+        for _ in range(60):
+            self.render()
+            self.gym.simulate(self.sim)
         
         # self.render_for_camera()
         self.gym.fetch_results(self.sim, True)
-
-        self.arm_hand_dof_pos[env_ids, 0:19] = self.arm_hand_prepare_dof_poses
-        self.prev_targets[env_ids, :self.num_arm_hand_dofs] = self.arm_hand_prepare_dof_poses
-        self.cur_targets[env_ids, :self.num_arm_hand_dofs] = self.arm_hand_prepare_dof_poses
-
-        self.gym.set_dof_position_target_tensor_indexed(self.sim,
-                                                        gymtorch.unwrap_tensor(self.prev_targets),
-                                                        gymtorch.unwrap_tensor(hand_indices), len(env_ids))
-
-        self.gym.set_dof_state_tensor_indexed(self.sim,
-                                              gymtorch.unwrap_tensor(self.dof_state),
-                                              gymtorch.unwrap_tensor(hand_indices), len(env_ids))
 
         self.segmentation_target_init_pos[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0:3].clone()
         self.segmentation_target_init_rot[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 3:7].clone()
@@ -743,6 +725,7 @@ class RealManInspireBlockAssemblySearch:
         self.gym.clear_lines(self.viewer)
 
         self.draw_point(self.envs[0], self.root_state_tensor[self.lego_segmentation_indices[0], 0:3], self.root_state_tensor[self.lego_segmentation_indices[0], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
+        self.draw_point(self.envs[0], self.segmentation_target_init_pos[0], self.segmentation_target_init_rot[0], ax="xyz", radius=0.03, num_segments=32, color=(0, 1, 0))
 
         # try:
         #     for env_id in range(min(4, self.num_envs)):

@@ -3,7 +3,7 @@ env:
   env_name: "allegro_hand_block_assembly_search"
   numEnvs: 1
   envSpacing: 1.25
-  episodeLength: 100
+  episodeLength: 75
   aggregateMode: 1
 
   actionsMovingAverage: 0.6
