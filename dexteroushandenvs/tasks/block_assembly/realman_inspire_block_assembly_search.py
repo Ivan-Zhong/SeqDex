@@ -53,8 +53,6 @@ class RealManInspireBlockAssemblySearch:
         self.headless = headless
         self.graphics_device_id = self.device_id
 
-
-        self.randomization_params = self.cfg["task"]["randomization_params"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
@@ -62,22 +60,16 @@ class RealManInspireBlockAssemblySearch:
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
         self.fingertip_adjustment_params = [[[0.15, 0.8, 0.15], 0.05], [[0.15, 0.8, 0.15], 0.055], [[0.2, 0.8, 0.15], 0.05], [[0.2, 0.8, 0.15], 0.045], [[0, 1, 0], 0.02]]
-        self.stack_obs = 3
 
-        self.num_observations = 129
-        self.num_states = 129
-        self.num_actions = 13
-
-        self.cfg["env"]["numObservations"] = self.num_observations * self.stack_obs
-        self.cfg["env"]["numStates"] = self.num_states * self.stack_obs
-        self.cfg["env"]["numActions"] = self.num_actions
-
+        self.cfg["env"]["numObservations"] = 129
+        self.cfg["env"]["numStates"] = 129
+        self.cfg["env"]["numActions"] = 13
 
         self.gym = gymapi.acquire_gym()
 
         self.num_envs = self.cfg["env"]["numEnvs"]
         self.num_obs = self.cfg["env"]["numObservations"]
-        self.num_states = self.cfg["env"].get("numStates", 0)
+        self.num_states = self.cfg["env"]["numStates"]
         self.num_actions = self.cfg["env"]["numActions"]
 
         self.control_freq_inv = self.cfg["env"].get("controlFrequencyInv", 1)
@@ -96,8 +88,6 @@ class RealManInspireBlockAssemblySearch:
         self.reset_buf = torch.ones(
             self.num_envs, device=self.device, dtype=torch.long)
         self.progress_buf = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.long)
-        self.randomize_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long)
         self.extras = {}
 
@@ -168,9 +158,6 @@ class RealManInspireBlockAssemblySearch:
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
         self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
 
-        self.base_pos = self.rigid_body_states[:, 0, 0:3]
-        self.target_euler = to_torch([0.0, 3.1415, 1.571], device=self.device).repeat((self.num_envs, 1))
-
     def create_sim(self):
         self.sim_params.up_axis = gymapi.UP_AXIS_Z
         self.sim_params.gravity.x = 0
@@ -227,18 +214,6 @@ class RealManInspireBlockAssemblySearch:
         print("self.num_arm_hand_dofs: ", self.num_arm_hand_dofs)
         print("self.num_arm_hand_actuators: ", self.num_arm_hand_actuators)
         print("self.num_arm_hand_tendons: ", self.num_arm_hand_tendons)
-
-        # tendon set up
-        limit_stiffness = 30
-        t_damping = 0.1
-        relevant_tendons = ['index_tendon', 'middle_tendon', 'ring_tendon', 'pinky_tendon', 'thumb_tendon_1']
-        tendon_props = self.gym.get_asset_tendon_properties(arm_hand_asset)
-
-        for i in range(self.num_arm_hand_tendons):
-            for rt in relevant_tendons:
-                if self.gym.get_asset_tendon_name(arm_hand_asset, i) == rt:
-                    tendon_props[i].limit_stiffness = limit_stiffness
-                    tendon_props[i].damping = t_damping
 
         # Set up each DOF.
         actuated_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
@@ -354,7 +329,6 @@ class RealManInspireBlockAssemblySearch:
 
         lego_assets = []
         lego_start_poses = []
-        self.segmentation_id = 1
 
         for n in range(9):
             for i, lego_file_name in enumerate(all_lego_files_name):
@@ -512,7 +486,7 @@ class RealManInspireBlockAssemblySearch:
             # add lego
             color_map = [[0.8, 0.64, 0.2], [0.13, 0.54, 0.13], [0, 0.4, 0.8], [1, 0.54, 0], [0.69, 0.13, 0.13], [0.69, 0.13, 0.13], [0, 0.4, 0.8], [0.8, 0.64, 0.2]]
             lego_idx = []
-            self.segmentation_id = i % 8
+            segmentation_id = i % 8
                 
             for lego_i, lego_asset in enumerate(lego_assets):
                 lego_handle = self.gym.create_actor(env_ptr, lego_asset, lego_start_poses[lego_i], "lego_{}".format(lego_i), i, 0, lego_i + 1)
@@ -520,7 +494,7 @@ class RealManInspireBlockAssemblySearch:
                                             lego_start_poses[lego_i].r.x, lego_start_poses[lego_i].r.y, lego_start_poses[lego_i].r.z, lego_start_poses[lego_i].r.w,
                                             0, 0, 0, 0, 0, 0])
                 idx = self.gym.get_actor_index(env_ptr, lego_handle, gymapi.DOMAIN_SIM)
-                if lego_i == self.segmentation_id:
+                if lego_i == segmentation_id:
                     self.lego_segmentation_indices.append(idx)
 
                 lego_idx.append(idx)
@@ -544,8 +518,6 @@ class RealManInspireBlockAssemblySearch:
             extra_object_idx = self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
             self.gym.set_rigid_body_color(env_ptr, extra_lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
             self.extra_object_indices.append(extra_object_idx)
-
-            self.mount_rigid_body_index = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "Link7", gymapi.DOMAIN_ENV)
 
             if self.aggregate_mode > 0:
                 self.gym.end_aggregate(env_ptr)
@@ -628,8 +600,6 @@ class RealManInspireBlockAssemblySearch:
     def reset_idx(self, env_ids):
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
-        self.base_pos[env_ids, :] = self.rigid_body_states[env_ids, 0, 0:3] + rand_floats[:, 7:10] * 0.00
-        self.base_pos[env_ids, 2] += 0.17
         
         lego_init_rand_floats = torch_rand_float(-1.0, 1.0, (self.num_envs * 132, 3), device=self.device)
         lego_init_rand_floats.view(self.num_envs, 132, 3)[:, 72:, :] = 0
@@ -721,7 +691,6 @@ class RealManInspireBlockAssemblySearch:
 
     def post_physics_step(self):
         self.progress_buf += 1
-        self.randomize_buf += 1
 
         self.compute_observations()
         self.compute_reward()
