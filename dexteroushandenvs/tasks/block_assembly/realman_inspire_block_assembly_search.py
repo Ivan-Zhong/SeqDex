@@ -655,12 +655,17 @@ class RealManInspireBlockAssemblySearch:
 
     def post_reset(self, env_ids, hand_indices):
         # step physics and render each frame
-        for _ in range(60):
+        for _ in range(80):
             self.render()
             self.gym.simulate(self.sim)
         
         # self.render_for_camera()
         self.gym.fetch_results(self.sim, True)
+
+        self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
 
         self.segmentation_target_init_pos[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0:3].clone()
         self.segmentation_target_init_rot[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 3:7].clone()
@@ -834,8 +839,8 @@ def compute_hand_reward(
 
     # Reward for object lifting
     # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
-    # object_up_reward = 50 * (0.2 - (segmentation_target_init_pos[:, 2] - segmentation_target_pos[:, 2]))
-    object_up_reward = 0
+    object_up_reward = 50 * torch.clamp(segmentation_target_pos[:, 2] - segmentation_target_init_pos[:, 2], min=0, max=None)
+    # object_up_reward = 0
 
     # action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
     action_penalty = 0
@@ -846,7 +851,7 @@ def compute_hand_reward(
     
     reward = grasp_reward + target_rot_reward + object_up_reward
 
-    print(f"Total reward {reward.mean().item():.2f}, grasp reward {grasp_reward.mean().item():.2f}, target rot reward {target_rot_reward:.2f}, object_up_reward {object_up_reward:.2f}")
+    print(f"Total reward {reward.mean().item():.2f}, grasp reward {grasp_reward.mean().item():.2f}, target rot reward {target_rot_reward:.2f}, object_up_reward {object_up_reward.mean().item():.2f}")
 
     # Fall penalty: distance to the goal is larger than a threshold
     # Check env termination conditions, including maximum success number
