@@ -53,6 +53,7 @@ class RealManInspireBlockAssemblySearch:
         self.headless = headless
         self.graphics_device_id = self.device_id
 
+        self.dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
@@ -212,6 +213,10 @@ class RealManInspireBlockAssemblySearch:
         # Set up each DOF.
         actuated_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
         self.actuated_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_dof_names]
+        actuated_hand_dof_names = ["R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
+        self.actuated_hand_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_hand_dof_names]
+        actuated_arm_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
+        self.actuated_arm_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_arm_dof_names]
 
         arm_hand_dof_props = self.gym.get_asset_dof_properties(arm_hand_asset)
         arm_hand_dof_props["driveMode"][:] = gymapi.DOF_MODE_POS
@@ -248,6 +253,8 @@ class RealManInspireBlockAssemblySearch:
                 arm_hand_dof_props['velocity'][i] = arm_hand_dof_velocity_list[i]
 
         self.actuated_dof_indices = to_torch(self.actuated_dof_indices, dtype=torch.long, device=self.device)
+        self.actuated_hand_dof_indices = to_torch(self.actuated_hand_dof_indices, dtype=torch.long, device=self.device)
+        self.actuated_arm_dof_indices = to_torch(self.actuated_arm_dof_indices, dtype=torch.long, device=self.device)
         self.arm_hand_dof_lower_limits = to_torch(self.arm_hand_dof_lower_limits, device=self.device)
         self.arm_hand_dof_upper_limits = to_torch(self.arm_hand_dof_upper_limits, device=self.device)
         self.arm_hand_dof_default_pos = to_torch(self.arm_hand_dof_default_pos, device=self.device)
@@ -320,6 +327,7 @@ class RealManInspireBlockAssemblySearch:
         all_lego_files_name = os.listdir("../assets/" + lego_path)
 
         all_lego_files_name = ['1x2.urdf', '1x2_curve.urdf', '1x3_curve_soft.urdf', '1x3_curve.urdf', '1x1.urdf', '1x3.urdf', '1x4.urdf', '2x2_curve_soft.urdf']
+        lego_g_half_length = [0.015, 0.015, 0.015, 0.015, 0.015, 0.015, 0.015, 0.03]
 
         lego_assets = []
         lego_start_poses = []
@@ -432,6 +440,7 @@ class RealManInspireBlockAssemblySearch:
         self.table_indices = []
         self.lego_indices = []
         self.lego_segmentation_indices = []
+        self.block_half_side_length = []
         self.extra_object_indices = []
 
         num_per_row = int(np.sqrt(self.num_envs))
@@ -481,6 +490,7 @@ class RealManInspireBlockAssemblySearch:
             color_map = [[0.8, 0.64, 0.2], [0.13, 0.54, 0.13], [0, 0.4, 0.8], [1, 0.54, 0], [0.69, 0.13, 0.13], [0.69, 0.13, 0.13], [0, 0.4, 0.8], [0.8, 0.64, 0.2]]
             lego_idx = []
             segmentation_id = i % 8
+            self.block_half_side_length.append(lego_g_half_length[segmentation_id])
                 
             for lego_i, lego_asset in enumerate(lego_assets):
                 lego_handle = self.gym.create_actor(env_ptr, lego_asset, lego_start_poses[lego_i], "lego_{}".format(lego_i), i, 0, lego_i + 1)
@@ -534,12 +544,13 @@ class RealManInspireBlockAssemblySearch:
         self.hand_indices = to_torch(self.hand_indices, dtype=torch.long, device=self.device)
         self.lego_indices = to_torch(self.lego_indices, dtype=torch.long, device=self.device)
         self.lego_segmentation_indices = to_torch(self.lego_segmentation_indices, dtype=torch.long, device=self.device)
+        self.block_half_side_length = to_torch(self.block_half_side_length, device=self.device)
 
     def compute_reward(self):
         self.rew_buf[:], self.reset_buf[:], self.progress_buf[:] = compute_hand_reward(
             self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos,
-            self.max_episode_length, self.segmentation_target_pos, self.fingertip_poses,
-            self.actions
+            self.max_episode_length, self.segmentation_target_pos, self.segmentation_target_rot, self.fingertip_poses,
+            self.actions, self.segmentation_target_side_pos
         )
 
     def compute_observations(self):
@@ -556,6 +567,7 @@ class RealManInspireBlockAssemblySearch:
 
         # Add finger states
         id = 38
+        
         self.fingertip_poses = []
         for i in range(5):
             pos = self.rigid_body_states[:, self.fingertip_handles[i], 0:3]
@@ -577,6 +589,11 @@ class RealManInspireBlockAssemblySearch:
         self.obs_buf[:, :] = self.states_buf[:, :]
 
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]
+        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7]
+        self.segmentation_target_side_pos = []
+        for direction in [1, -1]:
+            pos = self.segmentation_target_pos + quat_apply(self.segmentation_target_rot[:], to_torch([0,direction,0], device="cuda:0") * self.block_half_side_length.unsqueeze(-1))
+            self.segmentation_target_side_pos.append(pos)
 
         contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
         contacts = contacts[:, self.sensor_handle_indices, :] # 12
@@ -658,11 +675,17 @@ class RealManInspireBlockAssemblySearch:
 
         self.actions = actions.clone().to(self.device)
 
-        self.cur_targets[:, self.actuated_dof_indices] = scale(self.actions[:, :13],
-                                                                self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
-                                                                self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
-        self.cur_targets[:, self.actuated_dof_indices] = self.act_moving_average * self.cur_targets[:,
-                                                                                                    self.actuated_dof_indices] + (1.0 - self.act_moving_average) * self.prev_targets[:, self.actuated_dof_indices]
+        # Set hand actions
+        self.cur_targets[:, self.actuated_hand_dof_indices] = scale(self.actions[:, 7:],
+                                                                self.arm_hand_dof_lower_limits[self.actuated_hand_dof_indices],
+                                                                self.arm_hand_dof_upper_limits[self.actuated_hand_dof_indices])
+        self.cur_targets[:, self.actuated_hand_dof_indices] = self.act_moving_average * self.cur_targets[:,
+                                                                                                    self.actuated_hand_dof_indices] + (1.0 - self.act_moving_average) * self.prev_targets[:, self.actuated_hand_dof_indices]
+
+
+        # Set arm actions
+        self.cur_targets[:, self.actuated_arm_dof_indices] = self.arm_hand_dof_pos[:, self.actuated_arm_dof_indices] + self.actions[:, :7] * self.sim_params.dt * self.dof_speed_scale
+
 
         self.cur_targets[:, :] = tensor_clamp(self.cur_targets[:, :],
                                                 self.arm_hand_dof_lower_limits[:],
@@ -791,13 +814,28 @@ class RealManInspireBlockAssemblySearch:
 
 def compute_hand_reward(
     reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos,
-    max_episode_length: float, segmentation_target_pos, fingertip_poses, actions
+    max_episode_length: float, segmentation_target_pos, segmentation_target_rot, fingertip_poses, actions, segmentation_target_side_pos
 ):
-    arm_hand_finger_dist = 0
-    for i in range(5):
-        arm_hand_finger_dist += torch.norm(segmentation_target_pos - fingertip_poses[i], p=2, dim=-1)
+    # Reward for grasping
+    grasp_distance_two_directions = [0, 0]
+    for direction in range(2):
+        for i in range(5):
+            grasp_distance_two_directions[direction] += torch.norm(segmentation_target_side_pos[direction] - fingertip_poses[i], p=2, dim=-1)
+    grasp_reward = torch.exp(-torch.min(grasp_distance_two_directions[0], grasp_distance_two_directions[1]))
     # dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
-    dist_rew = arm_hand_finger_dist * (-100)
+
+    # Reward for block rotation
+    # euler = quat_to_euler_xyz(segmentation_target_rot)
+    # target_rot_reward = (-torch.abs(euler[:, 0]) - torch.abs(euler[:, 1])) * 100
+    target_rot_reward = 0
+
+    # Reward for hand rotation
+
+
+    # Reward for object lifting
+    # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
+    # object_up_reward = 50 * (0.2 - (segmentation_target_init_pos[:, 2] - segmentation_target_pos[:, 2]))
+    object_up_reward = 0
 
     # action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
     action_penalty = 0
@@ -805,13 +843,10 @@ def compute_hand_reward(
     # arm_contacts_penalty = torch.sum(arm_contacts, dim=-1) * 50
     arm_contacts_penalty = 0
 
-    # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
-    # object_up_reward = (segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2]) * 1000
-    object_up_reward = 0
     
-    reward = dist_rew - arm_contacts_penalty - action_penalty + object_up_reward
+    reward = grasp_reward + target_rot_reward + object_up_reward
 
-    print(f"Total reward {reward.mean().item():.2f}, dist_rew {dist_rew.mean().item():.2f}, arm_contacts_penalty {arm_contacts_penalty:.2f}, action_penalty {action_penalty:.2f}, object_up_reward {object_up_reward:.2f}")
+    print(f"Total reward {reward.mean().item():.2f}, grasp reward {grasp_reward.mean().item():.2f}, target rot reward {target_rot_reward:.2f}, object_up_reward {object_up_reward:.2f}")
 
     # Fall penalty: distance to the goal is larger than a threshold
     # Check env termination conditions, including maximum success number
@@ -821,3 +856,39 @@ def compute_hand_reward(
     resets = torch.where(timed_out, torch.ones_like(resets), resets)
 
     return reward, resets, progress_buf
+
+@torch.jit.script
+def quat_to_euler_xyz(quat):
+    """
+    Convert quaternions to Euler angles (roll, pitch, yaw).
+    :param quat: quaternions with shape (..., 4)
+    :return: tuple of roll, pitch, yaw with shape (..., 3)
+    """
+    # Ensure quat has shape (..., 4)
+    assert quat.shape[-1] == 4
+
+    # Normalize quaternion
+    quat = quat / torch.norm(quat, dim=-1, keepdim=True)
+
+    # Extract quaternion components
+    x, y, z, w = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+
+    # Roll (x-axis rotation)
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2.0 * (w * y - z * x)
+    pitch = torch.where(
+        torch.abs(sinp) >= 1,
+        torch.sign(sinp) * torch.pi / 2,
+        torch.asin(sinp)
+    )
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = torch.atan2(siny_cosp, cosy_cosp)
+
+    return torch.stack((roll, pitch, yaw), dim=-1)
