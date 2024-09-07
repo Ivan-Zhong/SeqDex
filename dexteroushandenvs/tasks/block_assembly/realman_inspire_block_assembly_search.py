@@ -262,7 +262,7 @@ class RealManInspireBlockAssemblySearch:
 
         # Put objects in the scene.
         arm_hand_start_pose = gymapi.Transform()
-        arm_hand_start_pose.p = gymapi.Vec3(-0.25, 0.0, 0.6)
+        arm_hand_start_pose.p = gymapi.Vec3(-0.15, 0.0, 0.6)
         arm_hand_start_pose.r = gymapi.Quat().from_euler_zyx(0, 0, 0.0)
 
         # create table asset
@@ -286,6 +286,8 @@ class RealManInspireBlockAssemblySearch:
         box_thin = 0.01
         box_xyz = [0.60, 0.416, 0.165]
         box_offset = [0.25, 0.19, 0]
+        self.box_bounds_x = [(box_offset[0] + box_xyz[0] / 2 - box_thin, 1), (box_offset[0] - box_xyz[0] / 2 + box_thin, -1)]
+        self.box_bounds_y = [(box_offset[1] + box_xyz[1] / 2 - box_thin, 1), (box_offset[1] - box_xyz[1] / 2 + box_thin, -1)]
 
         box_asset_options = gymapi.AssetOptions()
         box_asset_options.disable_gravity = False
@@ -332,12 +334,13 @@ class RealManInspireBlockAssemblySearch:
         lego_assets = []
         lego_start_poses = []
 
+        lego_asset_options = gymapi.AssetOptions()
+        lego_asset_options.disable_gravity = False
+        lego_asset_options.thickness = 0.00001
+        lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        lego_asset_options.density = 300.0
         for n in range(9):
             for i, lego_file_name in enumerate(all_lego_files_name):
-                lego_asset_options = gymapi.AssetOptions()
-                lego_asset_options.disable_gravity = False
-                lego_asset_options.thickness = 0.00001
-                lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
                 lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
 
                 lego_start_pose = gymapi.Transform()
@@ -467,6 +470,11 @@ class RealManInspireBlockAssemblySearch:
             hand_idx = self.gym.get_actor_index(env_ptr, arm_hand_actor, gymapi.DOMAIN_SIM)
             self.hand_indices.append(hand_idx)
 
+            arm_hand_actor_shape_props = self.gym.get_actor_rigid_shape_properties(env_ptr, arm_hand_actor)
+            for _, arm_hand_actor_shape_prop in enumerate(arm_hand_actor_shape_props):
+                arm_hand_actor_shape_prop.friction = 1
+            self.gym.set_actor_rigid_shape_properties(env_ptr, arm_hand_actor, arm_hand_actor_shape_props)
+
             # add table
             table_handle = self.gym.create_actor(env_ptr, table_asset, table_pose, "table", i, -1, 0)
             # self.gym.set_rigid_body_texture(env_ptr, table_handle, 0, gymapi.MESH_VISUAL, table_texture_handle)
@@ -502,11 +510,12 @@ class RealManInspireBlockAssemblySearch:
                     self.lego_segmentation_indices.append(idx)
 
                 lego_idx.append(idx)
-                lego_body_props = self.gym.get_actor_rigid_body_properties(env_ptr, lego_handle)
-                for lego_body_prop in lego_body_props:
-                    if flat_lego_end > lego_i >= flat_lego_begin:
-                        lego_body_prop.mass *= 1
-                self.gym.set_actor_rigid_body_properties(env_ptr, lego_handle, lego_body_props)
+                ### Check
+                # lego_body_props = self.gym.get_actor_rigid_body_properties(env_ptr, lego_handle)
+                # for lego_body_prop in lego_body_props:
+                #     if flat_lego_end > lego_i >= flat_lego_begin:
+                #         lego_body_prop.mass *= 1
+                # self.gym.set_actor_rigid_body_properties(env_ptr, lego_handle, lego_body_props)
 
                 color = color_map[lego_i % 8]
                 if flat_lego_end > lego_i >= flat_lego_begin:
@@ -518,7 +527,7 @@ class RealManInspireBlockAssemblySearch:
             self.extra_lego_init_states.append([extra_lego_start_pose.p.x, extra_lego_start_pose.p.y, extra_lego_start_pose.p.z,
                                         extra_lego_start_pose.r.x, extra_lego_start_pose.r.y, extra_lego_start_pose.r.z, extra_lego_start_pose.r.w,
                                         0, 0, 0, 0, 0, 0])
-            self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
+            # self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
             extra_object_idx = self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
             self.gym.set_rigid_body_color(env_ptr, extra_lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
             self.extra_object_indices.append(extra_object_idx)
@@ -548,9 +557,9 @@ class RealManInspireBlockAssemblySearch:
 
     def compute_reward(self):
         self.rew_buf[:], self.reset_buf[:], self.progress_buf[:] = compute_hand_reward(
-            self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos,
+            self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos, self.segmentation_target_init_rot,
             self.max_episode_length, self.segmentation_target_pos, self.segmentation_target_rot, self.fingertip_poses,
-            self.actions, self.segmentation_target_side_pos
+            self.actions, self.segmentation_target_side_pos, [self.box_bounds_x, self.box_bounds_y]
         )
 
     def compute_observations(self):
@@ -563,7 +572,8 @@ class RealManInspireBlockAssemblySearch:
         self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
                                                             self.arm_hand_dof_lower_limits[0:19],
                                                             self.arm_hand_dof_upper_limits[0:19])
-        self.states_buf[:, 19:38] = self.vel_obs_scale * self.arm_hand_dof_vel[:, 0:19]
+        # self.states_buf[:, 19:38] = self.vel_obs_scale * self.arm_hand_dof_vel[:, 0:19]
+        self.states_buf[:, 19:38] = self.arm_hand_dof_vel[:, 0:19]
 
         # Add finger states
         id = 38
@@ -818,20 +828,23 @@ class RealManInspireBlockAssemblySearch:
 #####################################################################
 
 def compute_hand_reward(
-    reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos,
-    max_episode_length: float, segmentation_target_pos, segmentation_target_rot, fingertip_poses, actions, segmentation_target_side_pos
+    reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos, segmentation_target_init_rot,
+    max_episode_length: float, segmentation_target_pos, segmentation_target_rot, fingertip_poses, actions, segmentation_target_side_pos, box_bounds
 ):
-    # Reward for grasping
-    grasp_distance_two_directions = [0, 0]
+    # Reward for approaching
+    approach_distance_two_directions = [0, 0]
     for direction in range(2):
-        for i in range(5):
-            grasp_distance_two_directions[direction] += torch.norm(segmentation_target_side_pos[direction] - fingertip_poses[i], p=2, dim=-1)
-    grasp_reward = torch.exp(-torch.min(grasp_distance_two_directions[0], grasp_distance_two_directions[1]))
+        # Add the distance of the 4 fingertips to one target side
+        for i in range(4):
+            approach_distance_two_directions[direction] += torch.norm(segmentation_target_side_pos[direction] - fingertip_poses[i], p=2, dim=-1)
+        # Add the distance of the thumb to the other target side
+        approach_distance_two_directions[direction] += 3 * torch.norm(segmentation_target_side_pos[1 - direction] - fingertip_poses[4], p=2, dim=-1)
+    approach_reward = torch.exp(-torch.min(approach_distance_two_directions[0], approach_distance_two_directions[1]))
     # dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
 
     # Reward for block rotation
     # euler = quat_to_euler_xyz(segmentation_target_rot)
-    # target_rot_reward = (-torch.abs(euler[:, 0]) - torch.abs(euler[:, 1])) * 100
+    # target_rot_reward = (-torch.abs(euler[:, 0]) - torch.abs(euler[:, 1])) * 5
     target_rot_reward = 0
 
     # Reward for hand rotation
@@ -841,6 +854,14 @@ def compute_hand_reward(
     # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
     object_up_reward = 50 * torch.clamp(segmentation_target_pos[:, 2] - segmentation_target_init_pos[:, 2], min=0, max=None)
     # object_up_reward = 0
+    
+    # Penalty for the fingers not within the box area
+    out_of_box_penalty = 0
+    for i in range(5):  # Five fingers
+        for axis in range(2):  # x and y
+            for bound, sgn in box_bounds[axis]:  # Two bounds
+                out_of_box_penalty += torch.clamp((bound - fingertip_poses[i][:, axis]) * sgn, min=None, max=0)
+    out_of_box_penalty *= 10
 
     # action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
     action_penalty = 0
@@ -849,9 +870,9 @@ def compute_hand_reward(
     arm_contacts_penalty = 0
 
     
-    reward = grasp_reward + target_rot_reward + object_up_reward
+    reward = approach_reward + target_rot_reward + object_up_reward + out_of_box_penalty
 
-    print(f"Total reward {reward.mean().item():.2f}, grasp reward {grasp_reward.mean().item():.2f}, target rot reward {target_rot_reward:.2f}, object_up_reward {object_up_reward.mean().item():.2f}")
+    print(f"Total reward {reward.mean().item():.2f}, approach reward {approach_reward.mean().item():.2f}, target rot reward {target_rot_reward:.2f}, object_up_reward {object_up_reward.mean().item():.2f}, out of box penalty {out_of_box_penalty.mean().item():.2f}")
 
     # Fall penalty: distance to the goal is larger than a threshold
     # Check env termination conditions, including maximum success number
