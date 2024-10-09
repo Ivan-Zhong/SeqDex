@@ -58,12 +58,16 @@ class RealManInspireBlockAssemblySearch:
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.max_episode_length = self.cfg["env"]["episodeLength"]
+        self.observe_all_drop_blocks = self.cfg["env"]["observeAllDropBlocks"]
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
         self.fingertip_adjustment_params = [[[0.15, 0.8, 0.15], 0.05], [[0.15, 0.8, 0.15], 0.055], [[0.2, 0.8, 0.15], 0.05], [[0.2, 0.8, 0.15], 0.045], [[0, 1, 0], 0.02]]
 
-        self.cfg["env"]["numObservations"] = 129
-        self.cfg["env"]["numStates"] = 129
+        self.cfg["env"]["numObservations"] = 130
+        self.cfg["env"]["numStates"] = 130
+        if self.observe_all_drop_blocks == True:
+            self.cfg["env"]["numObservations"] += 3 * 72
+            self.cfg["env"]["numStates"] += 3 * 72
         self.cfg["env"]["numActions"] = 13
 
         self.gym = gymapi.acquire_gym()
@@ -338,7 +342,7 @@ class RealManInspireBlockAssemblySearch:
         lego_asset_options.disable_gravity = False
         lego_asset_options.thickness = 0.00001
         lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        lego_asset_options.density = 300.0
+        # lego_asset_options.density = 300.0
         for n in range(9):
             for i, lego_file_name in enumerate(all_lego_files_name):
                 lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
@@ -442,7 +446,9 @@ class RealManInspireBlockAssemblySearch:
         self.predict_object_indices = []
         self.table_indices = []
         self.lego_indices = []
+        self.drop_lego_indices = []
         self.lego_segmentation_indices = []
+        self.segmentation_types = []
         self.block_half_side_length = []
         self.extra_object_indices = []
 
@@ -497,7 +503,10 @@ class RealManInspireBlockAssemblySearch:
             # add lego
             color_map = [[0.8, 0.64, 0.2], [0.13, 0.54, 0.13], [0, 0.4, 0.8], [1, 0.54, 0], [0.69, 0.13, 0.13], [0.69, 0.13, 0.13], [0, 0.4, 0.8], [0.8, 0.64, 0.2]]
             lego_idx = []
+            drop_lego_idx = []
+            # segmentation_id = 0
             segmentation_id = i % 8
+            self.segmentation_types.append(segmentation_id)
             self.block_half_side_length.append(lego_g_half_length[segmentation_id])
                 
             for lego_i, lego_asset in enumerate(lego_assets):
@@ -510,6 +519,8 @@ class RealManInspireBlockAssemblySearch:
                     self.lego_segmentation_indices.append(idx)
 
                 lego_idx.append(idx)
+                if lego_i < flat_lego_begin:
+                    drop_lego_idx.append(idx)
                 ### Check
                 # lego_body_props = self.gym.get_actor_rigid_body_properties(env_ptr, lego_handle)
                 # for lego_body_prop in lego_body_props:
@@ -522,6 +533,8 @@ class RealManInspireBlockAssemblySearch:
                     color = color_map[random.randint(0, 7)]
                 self.gym.set_rigid_body_color(env_ptr, lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(color[0], color[1], color[2]))
             self.lego_indices.append(lego_idx)
+            assert len(drop_lego_idx) == 72, "drop_lego_idx length is not 72"
+            self.drop_lego_indices.append(drop_lego_idx)
 
             extra_lego_handle = self.gym.create_actor(env_ptr, extra_lego_assets[0], extra_lego_start_pose, "extra_lego", i, 0, 0)
             self.extra_lego_init_states.append([extra_lego_start_pose.p.x, extra_lego_start_pose.p.y, extra_lego_start_pose.p.z,
@@ -552,14 +565,16 @@ class RealManInspireBlockAssemblySearch:
 
         self.hand_indices = to_torch(self.hand_indices, dtype=torch.long, device=self.device)
         self.lego_indices = to_torch(self.lego_indices, dtype=torch.long, device=self.device)
+        self.drop_lego_indices = to_torch(self.drop_lego_indices, dtype=torch.long, device=self.device)
         self.lego_segmentation_indices = to_torch(self.lego_segmentation_indices, dtype=torch.long, device=self.device)
+        self.segmentation_types = to_torch(self.segmentation_types, dtype=torch.long, device=self.device)
         self.block_half_side_length = to_torch(self.block_half_side_length, device=self.device)
 
     def compute_reward(self):
         self.rew_buf[:], self.reset_buf[:], self.progress_buf[:] = compute_hand_reward(
             self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos, self.segmentation_target_init_rot,
             self.max_episode_length, self.segmentation_target_pos, self.segmentation_target_rot, self.fingertip_poses,
-            self.actions, self.segmentation_target_side_pos, [self.box_bounds_x, self.box_bounds_y]
+            self.actions, self.segmentation_target_side_pos, [self.box_bounds_x, self.box_bounds_y], self.cover_count, self.cover_block_dist
         )
 
     def compute_observations(self):
@@ -593,13 +608,35 @@ class RealManInspireBlockAssemblySearch:
         id += 13
 
         # Add lego target state
+        self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]  # (num_envs, 3)
+        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7]
         self.states_buf[:, id:id + 13] = self.root_state_tensor[self.lego_segmentation_indices, 0:13]
+        id += 13
+
+        # Add lego target id
+        self.states_buf[:, id:id + 1] = self.segmentation_types.view(self.num_envs, -1)
+        id += 1
+
+        # Add cover object count and distance
+        lego_per_env = self.root_state_tensor[self.drop_lego_indices, 0:3]  # (num_envs, 72, 3)
+        assert lego_per_env.shape == (self.num_envs, 72, 3)
+        target_pos = self.segmentation_target_pos.unsqueeze(1)  # (num_envs, 1, 3)
+        condition = (torch.abs(lego_per_env[:, :, :2] - target_pos[:, :, :2]) < 0.06).all(dim=2) \
+                    & (lego_per_env[:, :, 2] > (target_pos[:, :, 2] + 1e-5))  # (num_envs, 72)
+        self.cover_count = condition.sum(dim=1, keepdim=True)  # (num_envs, 1)
+        # self.states_buf[:, id:id + 1] = self.cover_count
+        # id += 1
+        self.cover_block_dist = torch.sum(torch.norm((lego_per_env - target_pos) * condition.unsqueeze(-1), dim=-1), dim=1, keepdim=True)  # (num_envs, 1)
+        # self.states_buf[:, id:id + 1] = self.cover_block_dist
+        # id += 1
+
+        if self.observe_all_drop_blocks:
+            # Add all drop lego pos
+            self.states_buf[:, id:id + 3 * 72] = self.root_state_tensor[self.drop_lego_indices][:, :, 0:3].reshape(self.num_envs, -1)
         
         # Clone states buf to obs buf
         self.obs_buf[:, :] = self.states_buf[:, :]
 
-        self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]
-        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7]
         self.segmentation_target_side_pos = []
         for direction in [1, -1]:
             pos = self.segmentation_target_pos + quat_apply(self.segmentation_target_rot[:], to_torch([0,direction,0], device="cuda:0") * self.block_half_side_length.unsqueeze(-1))
@@ -829,18 +866,25 @@ class RealManInspireBlockAssemblySearch:
 
 def compute_hand_reward(
     reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos, segmentation_target_init_rot,
-    max_episode_length: float, segmentation_target_pos, segmentation_target_rot, fingertip_poses, actions, segmentation_target_side_pos, box_bounds
+    max_episode_length: float, segmentation_target_pos, segmentation_target_rot, fingertip_poses, actions, segmentation_target_side_pos, box_bounds, cover_count, cover_block_dist
 ):
     # Reward for approaching
-    approach_distance_two_directions = [0, 0]
-    for direction in range(2):
-        # Add the distance of the 4 fingertips to one target side
-        for i in range(4):
-            approach_distance_two_directions[direction] += torch.norm(segmentation_target_side_pos[direction] - fingertip_poses[i], p=2, dim=-1)
-        # Add the distance of the thumb to the other target side
-        approach_distance_two_directions[direction] += 3 * torch.norm(segmentation_target_side_pos[1 - direction] - fingertip_poses[4], p=2, dim=-1)
-    approach_reward = torch.exp(-torch.min(approach_distance_two_directions[0], approach_distance_two_directions[1]))
+    # approach_distance_two_directions = [0, 0]
+    # for direction in range(2):
+    #     # Add the distance of the index and middle fingers to one target side
+    #     for i in range(2):
+    #         approach_distance_two_directions[direction] += torch.norm(segmentation_target_side_pos[direction] - fingertip_poses[i], p=2, dim=-1)
+    #     # Add the distance of the thumb to the other target side
+    #     approach_distance_two_directions[direction] += 2 * torch.norm(segmentation_target_side_pos[1 - direction] - fingertip_poses[4], p=2, dim=-1)
+    # fingertip_approach_reward = torch.exp(-torch.clamp(torch.min(approach_distance_two_directions[0], approach_distance_two_directions[1]), min=0.2, max=None))
+    fingertip_approach_reward = 0
     # dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
+
+    # Reward for the center of the fingers approaching the block center
+    if_mf_th_center_pos = (fingertip_poses[0] + fingertip_poses[1] + 2 * fingertip_poses[4]) / 4
+    fingertip_center_approach_reward = 10 / (1 - torch.exp(-torch.norm(if_mf_th_center_pos - segmentation_target_pos, p=2, dim=-1)))
+    # fingertip_center_approach_reward = 0
+
 
     # Reward for block rotation
     # euler = quat_to_euler_xyz(segmentation_target_rot)
@@ -852,16 +896,22 @@ def compute_hand_reward(
 
     # Reward for object lifting
     # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
-    object_up_reward = 50 * torch.clamp(segmentation_target_pos[:, 2] - segmentation_target_init_pos[:, 2], min=0, max=None)
-    # object_up_reward = 0
+    # object_up_reward = 50 * torch.exp(torch.clamp(segmentation_target_pos[:, 2] - segmentation_target_init_pos[:, 2], min=0, max=None)) - 50
+    object_up_reward = 0
     
     # Penalty for the fingers not within the box area
     out_of_box_penalty = 0
-    for i in range(5):  # Five fingers
-        for axis in range(2):  # x and y
-            for bound, sgn in box_bounds[axis]:  # Two bounds
-                out_of_box_penalty += torch.clamp((bound - fingertip_poses[i][:, axis]) * sgn, min=None, max=0)
-    out_of_box_penalty *= 10
+    # for i in range(5):  # Five fingers
+    #     for axis in range(2):  # x and y
+    #         for bound, sgn in box_bounds[axis]:  # Two bounds
+    #             out_of_box_penalty += torch.clamp((bound - fingertip_poses[i][:, axis]) * sgn, min=None, max=0)
+    # out_of_box_penalty *= 10
+
+    # Penalty for being covered
+    # cover_reward = torch.where(cover_count > 0, cover_block_dist / cover_count, 0.4)
+    # cover_reward = cover_count.squeeze(-1) * (-0.2)
+    cover_reward = 0
+
 
     # action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
     action_penalty = 0
@@ -869,10 +919,9 @@ def compute_hand_reward(
     # arm_contacts_penalty = torch.sum(arm_contacts, dim=-1) * 50
     arm_contacts_penalty = 0
 
-    
-    reward = approach_reward + target_rot_reward + object_up_reward + out_of_box_penalty
+    reward = fingertip_center_approach_reward
 
-    print(f"Total reward {reward.mean().item():.2f}, approach reward {approach_reward.mean().item():.2f}, target rot reward {target_rot_reward:.2f}, object_up_reward {object_up_reward.mean().item():.2f}, out of box penalty {out_of_box_penalty.mean().item():.2f}")
+    print(f"Total reward {reward.mean().item():.2f}")
 
     # Fall penalty: distance to the goal is larger than a threshold
     # Check env termination conditions, including maximum success number

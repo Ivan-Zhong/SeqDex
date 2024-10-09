@@ -1,16 +1,14 @@
 # if given, will override the device setting in gym. 
 env: 
-  env_name: "allegro_hand_block_assembly_search"
+  env_name: "realman_inspire_block_assembly_search"
   numEnvs: 1
   envSpacing: 1.25
   episodeLength: 500
   aggregateMode: 1
-  dofSpeedScale: 3.0
-
+  dofSpeedScale: 5.0
   actionsMovingAverage: 0.6
-
   handAgentIndex: "[[0, 1, 2, 3, 4, 5]]"
-
+  observeAllDropBlocks: False
   asset:
     assetRoot: "../assets"
     assetFileName: "mjcf/realman_mjcf/realman_inspire_mjmodel.xml"
