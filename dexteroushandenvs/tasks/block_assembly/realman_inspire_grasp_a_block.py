@@ -36,9 +36,10 @@ import torch
 from isaacgym import gymapi, gymtorch
 from isaacgym.torch_utils import *
 from scipy.spatial.transform import Rotation as R
+import warnings
 
 
-class RealManInspireBlockAssemblySearch:
+class RealManInspireGraspABlock:
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
 
@@ -54,20 +55,16 @@ class RealManInspireBlockAssemblySearch:
         self.graphics_device_id = self.device_id
 
         self.dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
-        self.aggregate_mode = self.cfg["env"]["aggregateMode"]
+        # self.aggregate_mode = self.cfg["env"]["aggregateMode"]
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.max_episode_length = self.cfg["env"]["episodeLength"]
-        self.observe_all_drop_blocks = self.cfg["env"]["observeAllDropBlocks"]
 
         self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
         self.fingertip_adjustment_params = [[[0.15, 0.8, 0.15], 0.05], [[0.15, 0.8, 0.15], 0.055], [[0.2, 0.8, 0.15], 0.05], [[0.2, 0.8, 0.15], 0.045], [[0, 1, 0], 0.02]]
 
-        self.cfg["env"]["numObservations"] = 130
-        self.cfg["env"]["numStates"] = 130
-        if self.observe_all_drop_blocks == True:
-            self.cfg["env"]["numObservations"] += 3 * 72
-            self.cfg["env"]["numStates"] += 3 * 72
+        self.cfg["env"]["numObservations"] = 129
+        self.cfg["env"]["numStates"] = 129
         self.cfg["env"]["numActions"] = 13
 
         self.gym = gymapi.acquire_gym()
@@ -95,6 +92,8 @@ class RealManInspireBlockAssemblySearch:
         self.progress_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long)
         self.extras = {}
+
+        self.z_unit_vector = to_torch([0, 0, 1], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
 
         # create envs, sim and viewer
         self.create_sim()
@@ -152,11 +151,6 @@ class RealManInspireBlockAssemblySearch:
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
 
-        self.segmentation_target_init_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
-        self.segmentation_target_init_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
-        self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
-        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
-
     def create_sim(self):
         self.sim_params.up_axis = gymapi.UP_AXIS_Z
         self.sim_params.gravity.x = 0
@@ -197,12 +191,9 @@ class RealManInspireBlockAssemblySearch:
         asset_options.disable_gravity = True
         asset_options.thickness = 0.001
         asset_options.angular_damping = 0.01
-
         if self.physics_engine == gymapi.SIM_PHYSX:
             asset_options.use_physx_armature = True
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE  # ???
         arm_hand_asset = self.gym.load_asset(self.sim, asset_root, arm_hand_asset_file, asset_options)
-
         self.num_arm_hand_bodies = self.gym.get_asset_rigid_body_count(arm_hand_asset)
         self.num_arm_hand_shapes = self.gym.get_asset_rigid_shape_count(arm_hand_asset)
         self.num_arm_hand_dofs = self.gym.get_asset_dof_count(arm_hand_asset)
@@ -227,12 +218,10 @@ class RealManInspireBlockAssemblySearch:
 
         self.arm_hand_dof_lower_limits = []
         self.arm_hand_dof_upper_limits = []
-        self.arm_hand_dof_default_pos = []
         self.arm_hand_dof_default_vel = []
 
         arm_hand_dof_lower_limits_list = [-3.1, -2.268, -3.1, -2.355, -3.1, -2.233, -6.28]
         arm_hand_dof_upper_limits_list = [3.1, 2.268, 3.1, 2.355, 3.1, 2.233, 6.28]
-        arm_hand_dof_default_pos_list = [0.0, 0.0, 0.0, 0.6, 0.0, 0.59, -1.57]
         
         arm_hand_dof_stiffness_list = [200, 200, 100, 100, 50, 50, 50]
         arm_hand_dof_damping_list = [20, 20, 10, 10, 10, 5, 5]
@@ -243,11 +232,9 @@ class RealManInspireBlockAssemblySearch:
             if i < 7:
                 self.arm_hand_dof_lower_limits.append(arm_hand_dof_lower_limits_list[i])
                 self.arm_hand_dof_upper_limits.append(arm_hand_dof_upper_limits_list[i])
-                self.arm_hand_dof_default_pos.append(arm_hand_dof_default_pos_list[i])
             else:
                 self.arm_hand_dof_lower_limits.append(arm_hand_dof_props['lower'][i])
                 self.arm_hand_dof_upper_limits.append(arm_hand_dof_props['upper'][i])
-                self.arm_hand_dof_default_pos.append(0.0)
             self.arm_hand_dof_default_vel.append(0.0)
 
             if i < 7:
@@ -261,7 +248,6 @@ class RealManInspireBlockAssemblySearch:
         self.actuated_arm_dof_indices = to_torch(self.actuated_arm_dof_indices, dtype=torch.long, device=self.device)
         self.arm_hand_dof_lower_limits = to_torch(self.arm_hand_dof_lower_limits, device=self.device)
         self.arm_hand_dof_upper_limits = to_torch(self.arm_hand_dof_upper_limits, device=self.device)
-        self.arm_hand_dof_default_pos = to_torch(self.arm_hand_dof_default_pos, device=self.device)
         self.arm_hand_dof_default_vel = to_torch(self.arm_hand_dof_default_vel, device=self.device)
 
         # Put objects in the scene.
@@ -283,171 +269,27 @@ class RealManInspireBlockAssemblySearch:
         table_pose.p = gymapi.Vec3(0.0, 0.0, 0.5 * table_dims.z)
         table_pose.r = gymapi.Quat().from_euler_zyx(-0., 0, 0)
 
-        # create box asset
-        box_assets = []
-        box_start_poses = []
-
-        box_thin = 0.01
-        box_xyz = [0.60, 0.416, 0.165]
-        box_offset = [0.25, 0.19, 0]
-        self.box_bounds_x = [(box_offset[0] + box_xyz[0] / 2 - box_thin, 1), (box_offset[0] - box_xyz[0] / 2 + box_thin, -1)]
-        self.box_bounds_y = [(box_offset[1] + box_xyz[1] / 2 - box_thin, 1), (box_offset[1] - box_xyz[1] / 2 + box_thin, -1)]
-
-        box_asset_options = gymapi.AssetOptions()
-        box_asset_options.disable_gravity = False
-        box_asset_options.fix_base_link = True
-        box_asset_options.flip_visual_attachments = True
-        box_asset_options.collapse_fixed_joints = True
-        box_asset_options.disable_gravity = True
-        box_asset_options.thickness = 0.001
-
-        box_bottom_asset = self.gym.create_box(self.sim, box_xyz[0], box_xyz[1], box_thin, table_asset_options)
-        box_left_asset = self.gym.create_box(self.sim, box_xyz[0], box_thin, box_xyz[2], table_asset_options)
-        box_right_asset = self.gym.create_box(self.sim, box_xyz[0], box_thin, box_xyz[2], table_asset_options)
-        box_former_asset = self.gym.create_box(self.sim, box_thin, box_xyz[1], box_xyz[2], table_asset_options)
-        box_after_asset = self.gym.create_box(self.sim, box_thin, box_xyz[1], box_xyz[2], table_asset_options)
-
-        box_bottom_start_pose = gymapi.Transform()
-        box_bottom_start_pose.p = gymapi.Vec3(0.0 + box_offset[0], 0.0 + box_offset[1], 0.6 + (box_thin) / 2)
-        box_left_start_pose = gymapi.Transform()
-        box_left_start_pose.p = gymapi.Vec3(0.0 + box_offset[0], (box_xyz[1] - box_thin) / 2 + box_offset[1], 0.6 + (box_xyz[2]) / 2)
-        box_right_start_pose = gymapi.Transform()
-        box_right_start_pose.p = gymapi.Vec3(0.0 + box_offset[0], -(box_xyz[1] - box_thin) / 2 + box_offset[1], 0.6 + (box_xyz[2]) / 2)
-        box_former_start_pose = gymapi.Transform()
-        box_former_start_pose.p = gymapi.Vec3((box_xyz[0] - box_thin) / 2 + box_offset[0], 0.0 + box_offset[1], 0.6 + (box_xyz[2]) / 2)
-        box_after_start_pose = gymapi.Transform()
-        box_after_start_pose.p = gymapi.Vec3(-(box_xyz[0] - box_thin) / 2 + box_offset[0], 0.0 + box_offset[1], 0.6 + (box_xyz[2]) / 2)
-
-        box_assets.append(box_bottom_asset)
-        box_assets.append(box_left_asset)
-        box_assets.append(box_right_asset)
-        box_assets.append(box_former_asset)
-        box_assets.append(box_after_asset)
-        box_start_poses.append(box_bottom_start_pose)
-        box_start_poses.append(box_left_start_pose)
-        box_start_poses.append(box_right_start_pose)
-        box_start_poses.append(box_former_start_pose)
-        box_start_poses.append(box_after_start_pose)
-
         lego_path = "urdf/blender/urdf/"
-        all_lego_files_name = os.listdir("../assets/" + lego_path)
-
-        all_lego_files_name = ['1x2.urdf', '1x2_curve.urdf', '1x3_curve_soft.urdf', '1x3_curve.urdf', '1x1.urdf', '1x3.urdf', '1x4.urdf', '2x2_curve_soft.urdf']
-        lego_g_half_length = [0.015, 0.015, 0.015, 0.015, 0.015, 0.015, 0.015, 0.03]
-
-        lego_assets = []
-        lego_start_poses = []
-
+        lego_file_name = '1x2.urdf'
         lego_asset_options = gymapi.AssetOptions()
         lego_asset_options.disable_gravity = False
         lego_asset_options.thickness = 0.00001
         lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
         # lego_asset_options.density = 300.0
-        for n in range(9):
-            for i, lego_file_name in enumerate(all_lego_files_name):
-                lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
+        lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
 
-                lego_start_pose = gymapi.Transform()
-                if n % 2 == 0:
-                    lego_start_pose.p = gymapi.Vec3(-0.17 + 0.17 * int(i % 3) + 0.25, -0.11 + 0.11 * int(i / 3) + 0.19, 0.68 + n * 0.06)
-                else:
-                    lego_start_pose.p = gymapi.Vec3(0.17 - 0.17 * int(i % 3) + 0.25, 0.11 - 0.11 * int(i / 3) + 0.19, 0.68 + n * 0.06)
-
-                lego_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.785)
-                
-                lego_assets.append(lego_asset)
-                lego_start_poses.append(lego_start_pose)
-
-        lego_asset_options = gymapi.AssetOptions()
-        lego_asset_options.disable_gravity = False
-        lego_asset_options.fix_base_link = True
-        lego_asset_options.thickness = 0.001
-        lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        # lego_asset_options.density = 2000
-        flat_lego_begin = len(lego_assets)        
-        ran_list = [0 ,0 ,0, 1, 2, 2]
-        lego_list = [0, 5, 6]
-        bianchang = [0.03, 0.045, 0.06]        
-        for j in range(10):
-            random.shuffle(ran_list)
-            lego_center = [0.254 - bianchang[ran_list[0]] + 0.25, 0.175 + 0.19 - 0.039 * j, 0.63]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0] , lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[0]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[0]] + bianchang[ran_list[1]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[1]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[1]] + bianchang[ran_list[2]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[2]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[2]] + bianchang[ran_list[3]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[3]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[3]] + bianchang[ran_list[4]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[4]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[4]] + bianchang[ran_list[5]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[5]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)        
+        lego_start_pose = gymapi.Transform()
+        lego_start_pose.p = gymapi.Vec3(0.25, 0.19, 0.75)
+        lego_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.785)
         
-        flat_lego_end = len(lego_assets)
 
-        extra_lego_asset_options = gymapi.AssetOptions()
-        extra_lego_asset_options.disable_gravity = False
-        extra_lego_asset_options.fix_base_link = True
-
-        extra_lego_assets = []
-
-        # fake extra lego
-        extra_lego_asset = self.gym.load_asset(self.sim, asset_root, "urdf/blender/assets_for_insertion/urdf/12x12x1_real.urdf", extra_lego_asset_options)
-        extra_lego_assets.append(extra_lego_asset)
-
-        extra_lego_start_pose = gymapi.Transform()
-        extra_lego_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.0)
-        # Assets visualization
-        extra_lego_start_pose.p = gymapi.Vec3(0.25, -0.35, 0.618)
-
-        # compute aggregate size
-        max_agg_bodies = self.num_arm_hand_bodies + 2 + 1 + len(lego_assets) + 5 + 10 
-        max_agg_shapes = self.num_arm_hand_shapes + 2 + 1 + len(lego_assets) + 5 + 100 
-
+        # Create actors
         self.arm_hands = []
         self.envs = []
-
         self.lego_init_states = []
         self.hand_start_states = []
-        self.extra_lego_init_states = []
-
         self.hand_indices = []
         self.lego_indices = []
-        self.drop_lego_indices = []
-        self.lego_segmentation_indices = []
-        self.segmentation_types = []
-        self.block_half_side_length = []
-        self.extra_object_indices = []
 
         num_per_row = int(np.sqrt(self.num_envs))
         for i in range(self.num_envs):
@@ -456,8 +298,8 @@ class RealManInspireBlockAssemblySearch:
                 self.sim, lower, upper, num_per_row
             )
 
-            if self.aggregate_mode >= 1:
-                self.gym.begin_aggregate(env_ptr, max_agg_bodies, max_agg_shapes, True)
+            # if self.aggregate_mode >= 1:
+            #     self.gym.begin_aggregate(env_ptr, max_agg_bodies, max_agg_shapes, True)
 
             # add hand - collision filter = -1 to use asset collision filters set in mjcf loader
             arm_hand_actor = self.gym.create_actor(env_ptr, arm_hand_asset, arm_hand_start_pose, "hand", i, 0, 0)
@@ -480,8 +322,6 @@ class RealManInspireBlockAssemblySearch:
 
             # add table
             table_handle = self.gym.create_actor(env_ptr, table_asset, table_pose, "table", i, -1, 0)
-            # self.gym.set_rigid_body_texture(env_ptr, table_handle, 0, gymapi.MESH_VISUAL, table_texture_handle)
-            table_idx = self.gym.get_actor_index(env_ptr, table_handle, gymapi.DOMAIN_SIM)
             self.gym.set_rigid_body_color(
                 env_ptr, table_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 0.9, 0.8)
             )
@@ -491,58 +331,20 @@ class RealManInspireBlockAssemblySearch:
                 object_shape_prop.friction = 1
             self.gym.set_actor_rigid_shape_properties(env_ptr, table_handle, table_shape_props)
 
-            # add box
-            for box_i, box_asset in enumerate(box_assets):
-                box_handle = self.gym.create_actor(env_ptr, box_asset, box_start_poses[box_i], "box_{}".format(box_i), i, 0, 0)
-                self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
             # add lego
-            color_map = [[0.8, 0.64, 0.2], [0.13, 0.54, 0.13], [0, 0.4, 0.8], [1, 0.54, 0], [0.69, 0.13, 0.13], [0.69, 0.13, 0.13], [0, 0.4, 0.8], [0.8, 0.64, 0.2]]
-            lego_idx = []
-            drop_lego_idx = []
-            # segmentation_id = 0
-            segmentation_id = i % 8
-            self.segmentation_types.append(segmentation_id)
-            self.block_half_side_length.append(lego_g_half_length[segmentation_id])
-                
-            for lego_i, lego_asset in enumerate(lego_assets):
-                lego_handle = self.gym.create_actor(env_ptr, lego_asset, lego_start_poses[lego_i], "lego_{}".format(lego_i), i, 0, lego_i + 1)
-                self.lego_init_states.append([lego_start_poses[lego_i].p.x, lego_start_poses[lego_i].p.y, lego_start_poses[lego_i].p.z,
-                                            lego_start_poses[lego_i].r.x, lego_start_poses[lego_i].r.y, lego_start_poses[lego_i].r.z, lego_start_poses[lego_i].r.w,
+            color = [0.8, 0.64, 0.2]
+
+            lego_handle = self.gym.create_actor(env_ptr, lego_asset, lego_start_pose, "lego", i, 0, 1)
+            self.lego_init_states.append([lego_start_pose.p.x, lego_start_pose.p.y, lego_start_pose.p.z,
+                                            lego_start_pose.r.x, lego_start_pose.r.y, lego_start_pose.r.z, lego_start_pose.r.w,
                                             0, 0, 0, 0, 0, 0])
-                idx = self.gym.get_actor_index(env_ptr, lego_handle, gymapi.DOMAIN_SIM)
-                if lego_i == segmentation_id:
-                    self.lego_segmentation_indices.append(idx)
+            idx = self.gym.get_actor_index(env_ptr, lego_handle, gymapi.DOMAIN_SIM)
+            self.gym.set_rigid_body_color(env_ptr, lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(color[0], color[1], color[2]))
+            self.lego_indices.append(idx)
 
-                lego_idx.append(idx)
-                if lego_i < flat_lego_begin:
-                    drop_lego_idx.append(idx)
-                ### Check
-                # lego_body_props = self.gym.get_actor_rigid_body_properties(env_ptr, lego_handle)
-                # for lego_body_prop in lego_body_props:
-                #     if flat_lego_end > lego_i >= flat_lego_begin:
-                #         lego_body_prop.mass *= 1
-                # self.gym.set_actor_rigid_body_properties(env_ptr, lego_handle, lego_body_props)
-
-                color = color_map[lego_i % 8]
-                if flat_lego_end > lego_i >= flat_lego_begin:
-                    color = color_map[random.randint(0, 7)]
-                self.gym.set_rigid_body_color(env_ptr, lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(color[0], color[1], color[2]))
-            self.lego_indices.append(lego_idx)
-            assert len(drop_lego_idx) == 72, "drop_lego_idx length is not 72"
-            self.drop_lego_indices.append(drop_lego_idx)
-
-            extra_lego_handle = self.gym.create_actor(env_ptr, extra_lego_assets[0], extra_lego_start_pose, "extra_lego", i, 0, 0)
-            self.extra_lego_init_states.append([extra_lego_start_pose.p.x, extra_lego_start_pose.p.y, extra_lego_start_pose.p.z,
-                                        extra_lego_start_pose.r.x, extra_lego_start_pose.r.y, extra_lego_start_pose.r.z, extra_lego_start_pose.r.w,
-                                        0, 0, 0, 0, 0, 0])
-            # self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
-            extra_object_idx = self.gym.get_actor_index(env_ptr, extra_lego_handle, gymapi.DOMAIN_SIM)
-            self.gym.set_rigid_body_color(env_ptr, extra_lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
-            self.extra_object_indices.append(extra_object_idx)
-
-            if self.aggregate_mode > 0:
-                self.gym.end_aggregate(env_ptr)
+            # if self.aggregate_mode > 0:
+            #     self.gym.end_aggregate(env_ptr)
 
             self.envs.append(env_ptr)
             self.arm_hands.append(arm_hand_actor)
@@ -550,28 +352,35 @@ class RealManInspireBlockAssemblySearch:
         # Acquire specific links.
         sensor_handles = [0, 1, 2, 3, 4, 5, 6]
         self.sensor_handle_indices = to_torch(sensor_handles, dtype=torch.int64)
-
         self.fingertip_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, name) for name in self.fingertip_names]
-
         self.hand_start_states = to_torch(self.hand_start_states, device=self.device).view(self.num_envs, 13)
-
-        self.lego_init_states = to_torch(self.lego_init_states, device=self.device).view(self.num_envs, len(lego_assets), 13)
-
+        self.lego_init_states = to_torch(self.lego_init_states, device=self.device).view(self.num_envs, 13)
         self.fingertip_handles = to_torch(self.fingertip_handles, dtype=torch.long, device=self.device)
-
         self.hand_indices = to_torch(self.hand_indices, dtype=torch.long, device=self.device)
         self.lego_indices = to_torch(self.lego_indices, dtype=torch.long, device=self.device)
-        self.drop_lego_indices = to_torch(self.drop_lego_indices, dtype=torch.long, device=self.device)
-        self.lego_segmentation_indices = to_torch(self.lego_segmentation_indices, dtype=torch.long, device=self.device)
-        self.segmentation_types = to_torch(self.segmentation_types, dtype=torch.long, device=self.device)
-        self.block_half_side_length = to_torch(self.block_half_side_length, device=self.device)
 
     def compute_reward(self):
-        self.rew_buf[:], self.reset_buf[:], self.progress_buf[:] = compute_hand_reward(
-            self.reset_buf, self.progress_buf, self.contacts, self.segmentation_target_init_pos, self.segmentation_target_init_rot,
-            self.max_episode_length, self.segmentation_target_pos, self.segmentation_target_rot, self.fingertip_poses,
-            self.actions, self.segmentation_target_side_pos, [self.box_bounds_x, self.box_bounds_y], self.cover_count, self.cover_block_dist
-        )
+        finger_dist = 0
+        for i in [0, 4]:
+            finger_dist += torch.norm(self.lego_pos - self.fingertip_poses[i], p=2, dim=-1)
+        distance_reward = torch.exp(-5 * torch.clamp(finger_dist - 0.15, 0, None))
+
+        # define grasp reward
+        lift_reward = 50 * self.lego_pos[:, 2]
+
+        reward = distance_reward + lift_reward
+
+        print(f"Total reward {reward.mean().item():.2f}")
+
+        # Fall penalty: distance to the goal is larger than a threshold
+        # Check env termination conditions, including maximum success number
+        resets = self.reset_buf
+
+        timed_out = self.progress_buf >= self.max_episode_length - 1
+        resets = torch.where(timed_out, torch.ones_like(resets), resets)
+        self.reset_buf[:] = resets
+        self.rew_buf[:] = reward
+
 
     def compute_observations(self):
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -604,39 +413,14 @@ class RealManInspireBlockAssemblySearch:
         id += 13
 
         # Add lego target state
-        self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3]  # (num_envs, 3)
-        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7]
-        self.states_buf[:, id:id + 13] = self.root_state_tensor[self.lego_segmentation_indices, 0:13]
+        self.lego_pos = self.root_state_tensor[self.lego_indices, 0:3]  # (num_envs, 3)
+        self.lego_rot = self.root_state_tensor[self.lego_indices, 3:7]
+        self.states_buf[:, id:id + 13] = self.root_state_tensor[self.lego_indices, 0:13]
         id += 13
-
-        # Add lego target id
-        self.states_buf[:, id:id + 1] = self.segmentation_types.view(self.num_envs, -1)
-        id += 1
-
-        # Add cover object count and distance
-        lego_per_env = self.root_state_tensor[self.drop_lego_indices, 0:3]  # (num_envs, 72, 3)
-        assert lego_per_env.shape == (self.num_envs, 72, 3)
-        target_pos = self.segmentation_target_pos.unsqueeze(1)  # (num_envs, 1, 3)
-        condition = (torch.abs(lego_per_env[:, :, :2] - target_pos[:, :, :2]) < 0.06).all(dim=2) \
-                    & (lego_per_env[:, :, 2] > (target_pos[:, :, 2] + 1e-5))  # (num_envs, 72)
-        self.cover_count = condition.sum(dim=1, keepdim=True)  # (num_envs, 1)
-        # self.states_buf[:, id:id + 1] = self.cover_count
-        # id += 1
-        self.cover_block_dist = torch.sum(torch.norm((lego_per_env - target_pos) * condition.unsqueeze(-1), dim=-1), dim=1, keepdim=True)  # (num_envs, 1)
-        # self.states_buf[:, id:id + 1] = self.cover_block_dist
-        # id += 1
-
-        if self.observe_all_drop_blocks:
-            # Add all drop lego pos
-            self.states_buf[:, id:id + 3 * 72] = self.root_state_tensor[self.drop_lego_indices][:, :, 0:3].reshape(self.num_envs, -1)
         
         # Clone states buf to obs buf
         self.obs_buf[:, :] = self.states_buf[:, :]
 
-        self.segmentation_target_side_pos = []
-        for direction in [1, -1]:
-            pos = self.segmentation_target_pos + quat_apply(self.segmentation_target_rot[:], to_torch([0,direction,0], device="cuda:0") * self.block_half_side_length.unsqueeze(-1))
-            self.segmentation_target_side_pos.append(pos)
 
         contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
         contacts = contacts[:, self.sensor_handle_indices, :] # 12
@@ -652,22 +436,9 @@ class RealManInspireBlockAssemblySearch:
                             self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
     def reset_idx(self, env_ids):
-        # generate random values
-        rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
-        
-        lego_init_rand_floats = torch_rand_float(-1.0, 1.0, (self.num_envs * 132, 3), device=self.device)
-        lego_init_rand_floats.view(self.num_envs, 132, 3)[:, 72:, :] = 0
-
         # reset object
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 0:7] = self.lego_init_states[env_ids].view(-1, 13)[:, 0:7].clone()
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 7:13] = torch.zeros_like(self.root_state_tensor[self.lego_indices[env_ids].view(-1), 7:13])
-        self.root_state_tensor[self.lego_indices[env_ids].view(-1), 0:1] = self.lego_init_states[env_ids].view(-1, 13)[:, 0:1].clone() + lego_init_rand_floats[:, 0].unsqueeze(-1) * 0.02
-        self.root_state_tensor[self.lego_indices[env_ids].view(-1), 1:2] = self.lego_init_states[env_ids].view(-1, 13)[:, 1:2].clone() + lego_init_rand_floats[:, 1].unsqueeze(-1) * 0.02
-
-        # randomize segmentation object
-        self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0] = 0.25 + rand_floats[env_ids, 0] * 0.2
-        self.root_state_tensor[self.lego_segmentation_indices[env_ids], 1] = 0.19 + rand_floats[env_ids, 0] * 0.15
-        self.root_state_tensor[self.lego_segmentation_indices[env_ids], 2] = 0.9
 
         lego_ind = self.lego_indices[env_ids].view(-1).to(torch.int32)
 
@@ -698,7 +469,7 @@ class RealManInspireBlockAssemblySearch:
 
     def post_reset(self, env_ids, hand_indices):
         # step physics and render each frame
-        for _ in range(80):
+        for _ in range(20):
             self.render()
             self.gym.simulate(self.sim)
         
@@ -709,9 +480,6 @@ class RealManInspireBlockAssemblySearch:
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
-
-        self.segmentation_target_init_pos[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0:3].clone()
-        self.segmentation_target_init_rot[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 3:7].clone()
 
         print("post_reset finish")
 
@@ -795,8 +563,7 @@ class RealManInspireBlockAssemblySearch:
 
         self.gym.clear_lines(self.viewer)
 
-        self.draw_point(self.envs[0], self.root_state_tensor[self.lego_segmentation_indices[0], 0:3], self.root_state_tensor[self.lego_segmentation_indices[0], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
-        self.draw_point(self.envs[0], self.segmentation_target_init_pos[0], self.segmentation_target_init_rot[0], ax="xyz", radius=0.03, num_segments=32, color=(0, 1, 0))
+        self.draw_point(self.envs[0], self.root_state_tensor[self.lego_indices[0], 0:3], self.root_state_tensor[self.lego_indices[0], 3:7], ax="xyz", radius=0.03, num_segments=32, color=(1, 0, 0))
 
         # try:
         #     for env_id in range(min(4, self.num_envs)):
@@ -854,80 +621,6 @@ class RealManInspireBlockAssemblySearch:
             else:
                 self.gym.poll_viewer_events(self.viewer)
 
-
-
-#####################################################################
-###=========================jit functions=========================###
-#####################################################################
-
-def compute_hand_reward(
-    reset_buf, progress_buf, arm_contacts, segmentation_target_init_pos, segmentation_target_init_rot,
-    max_episode_length: float, segmentation_target_pos, segmentation_target_rot, fingertip_poses, actions, segmentation_target_side_pos, box_bounds, cover_count, cover_block_dist
-):
-    # Reward for approaching
-    # approach_distance_two_directions = [0, 0]
-    # for direction in range(2):
-    #     # Add the distance of the index and middle fingers to one target side
-    #     for i in range(2):
-    #         approach_distance_two_directions[direction] += torch.norm(segmentation_target_side_pos[direction] - fingertip_poses[i], p=2, dim=-1)
-    #     # Add the distance of the thumb to the other target side
-    #     approach_distance_two_directions[direction] += 2 * torch.norm(segmentation_target_side_pos[1 - direction] - fingertip_poses[4], p=2, dim=-1)
-    # fingertip_approach_reward = torch.exp(-torch.clamp(torch.min(approach_distance_two_directions[0], approach_distance_two_directions[1]), min=0.2, max=None))
-    fingertip_approach_reward = 0
-    # dist_rew = torch.clamp(- 0.2 *arm_hand_finger_dist, None, -0.06)
-
-    # Reward for the center of the fingers approaching the block center
-    if_mf_th_center_pos = (fingertip_poses[0] + fingertip_poses[1] + 2 * fingertip_poses[4]) / 4
-    fingertip_center_approach_reward = 10 / (1 - torch.exp(-torch.norm(if_mf_th_center_pos - segmentation_target_pos, p=2, dim=-1)))
-    # fingertip_center_approach_reward = 0
-
-
-    # Reward for block rotation
-    # euler = quat_to_euler_xyz(segmentation_target_rot)
-    # target_rot_reward = (-torch.abs(euler[:, 0]) - torch.abs(euler[:, 1])) * 5
-    target_rot_reward = 0
-
-    # Reward for hand rotation
-
-
-    # Reward for object lifting
-    # object_up_reward = torch.clamp(segmentation_target_pos[:, 2]-segmentation_target_init_pos[:, 2], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 0]-segmentation_target_init_pos[:, 0], min=0, max=0.1) * 2000 - torch.clamp(segmentation_target_pos[:, 1]-segmentation_target_init_pos[:, 1], min=0, max=0.1) * 2000
-    # object_up_reward = 50 * torch.exp(torch.clamp(segmentation_target_pos[:, 2] - segmentation_target_init_pos[:, 2], min=0, max=None)) - 50
-    object_up_reward = 0
-    
-    # Penalty for the fingers not within the box area
-    out_of_box_penalty = 0
-    # for i in range(5):  # Five fingers
-    #     for axis in range(2):  # x and y
-    #         for bound, sgn in box_bounds[axis]:  # Two bounds
-    #             out_of_box_penalty += torch.clamp((bound - fingertip_poses[i][:, axis]) * sgn, min=None, max=0)
-    # out_of_box_penalty *= 10
-
-    # Penalty for being covered
-    # cover_reward = torch.where(cover_count > 0, cover_block_dist / cover_count, 0.4)
-    # cover_reward = cover_count.squeeze(-1) * (-0.2)
-    cover_reward = 0
-
-
-    # action_penalty = torch.sum(actions ** 2, dim=-1) * 0.005
-    action_penalty = 0
-
-    # arm_contacts_penalty = torch.sum(arm_contacts, dim=-1) * 50
-    arm_contacts_penalty = 0
-
-    reward = fingertip_center_approach_reward
-
-    print(f"Total reward {reward.mean().item():.2f}")
-
-    # Fall penalty: distance to the goal is larger than a threshold
-    # Check env termination conditions, including maximum success number
-    resets = reset_buf
-
-    timed_out = progress_buf >= max_episode_length - 1
-    resets = torch.where(timed_out, torch.ones_like(resets), resets)
-
-    return reward, resets, progress_buf
-
 @torch.jit.script
 def quat_to_euler_xyz(quat):
     """
@@ -963,3 +656,129 @@ def quat_to_euler_xyz(quat):
     yaw = torch.atan2(siny_cosp, cosy_cosp)
 
     return torch.stack((roll, pitch, yaw), dim=-1)
+
+
+_DEFAULT_VALUE_AT_MARGIN = 0.1
+
+
+def _sigmoids(x, value_at_1, sigmoid):
+    """Returns 1 when `x` == 0, between 0 and 1 otherwise.
+
+    Args:
+        x: A scalar or PyTorch tensor of shape (batch_size, 1).
+        value_at_1: A float between 0 and 1 specifying the output when `x` == 1.
+        sigmoid: String, choice of sigmoid type.
+
+    Returns:
+        A PyTorch tensor with values between 0.0 and 1.0.
+
+    Raises:
+        ValueError: If not 0 < `value_at_1` < 1, except for `linear`, `cosine` and
+          `quadratic` sigmoids which allow `value_at_1` == 0.
+        ValueError: If `sigmoid` is of an unknown type.
+    """
+    if sigmoid in ('cosine', 'linear', 'quadratic'):
+        if not 0 <= value_at_1 < 1:
+            raise ValueError('`value_at_1` must be nonnegative and smaller than 1, '
+                             'got {}.'.format(value_at_1))
+    else:
+        if not 0 < value_at_1 < 1:
+            raise ValueError('`value_at_1` must be strictly between 0 and 1, '
+                             'got {}.'.format(value_at_1))
+
+    if sigmoid == 'gaussian':
+        scale = torch.sqrt(-2 * torch.log(torch.tensor(value_at_1)))
+        return torch.exp(-0.5 * (x * scale) ** 2)
+
+    elif sigmoid == 'hyperbolic':
+        scale = torch.acosh(1 / torch.tensor(value_at_1))
+        return 1 / torch.cosh(x * scale)
+
+    elif sigmoid == 'long_tail':
+        scale = torch.sqrt(1 / torch.tensor(value_at_1) - 1)
+        return 1 / ((x * scale) ** 2 + 1)
+
+    elif sigmoid == 'reciprocal':
+        scale = 1 / torch.tensor(value_at_1) - 1
+        return 1 / (torch.abs(x) * scale + 1)
+
+    elif sigmoid == 'cosine':
+        scale = torch.acos(2 * torch.tensor(value_at_1) - 1) / torch.pi
+        scaled_x = x * scale
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                action='ignore', message='invalid value encountered in cos')
+            cos_pi_scaled_x = torch.cos(torch.pi * scaled_x)
+        return torch.where(torch.abs(scaled_x) < 1, (1 + cos_pi_scaled_x) / 2, torch.tensor(0.0))
+
+    elif sigmoid == 'linear':
+        scale = 1 - torch.tensor(value_at_1)
+        scaled_x = x * scale
+        return torch.where(torch.abs(scaled_x) < 1, 1 - scaled_x, torch.tensor(0.0))
+
+    elif sigmoid == 'quadratic':
+        scale = torch.sqrt(1 - torch.tensor(value_at_1))
+        scaled_x = x * scale
+        return torch.where(torch.abs(scaled_x) < 1, 1 - scaled_x ** 2, torch.tensor(0.0))
+
+    elif sigmoid == 'tanh_squared':
+        scale = torch.atanh(torch.sqrt(1 - torch.tensor(value_at_1)))
+        return 1 - torch.tanh(x * scale) ** 2
+
+    else:
+        raise ValueError('Unknown sigmoid type {!r}.'.format(sigmoid))
+
+def tolerance(x, y, r, margin=0.0, sigmoid='gaussian', value_at_margin=_DEFAULT_VALUE_AT_MARGIN):
+    """Returns 1 when `x` falls inside the circle centered at `p` with radius `r`, between 0 and 1 otherwise.
+
+    Args:
+        x: A batch_size x 3 numpy array representing the points to check.
+        y: A length-3 numpy array representing the center of the circle.
+        r: Float. The radius of the circle.
+        margin: Float. Parameter that controls how steeply the output decreases as `x` moves out-of-bounds.
+        sigmoid: String, choice of sigmoid type. Valid values are: 'gaussian', 'linear', 'hyperbolic', 'long_tail', 'cosine', 'tanh_squared'.
+        value_at_margin: A float between 0 and 1 specifying the output value when the distance from `x` to the nearest bound is equal to `margin`. Ignored if `margin == 0`.
+
+    Returns:
+        A numpy array with values between 0.0 and 1.0 for each point in the batch.
+
+    Raises:
+        ValueError: If `margin` is negative.
+    """
+    if margin < 0:
+        raise ValueError('`margin` must be non-negative.')
+
+    # Calculate the Euclidean distance from each point in x to p
+    distance = torch.norm(x - y, p=2, dim=-1)
+
+    in_bounds = distance <= r
+    if margin == 0:
+        value = torch.where(in_bounds, 1.0, 0.0)
+    else:
+        d = (distance - r) / margin
+
+        value = torch.where(in_bounds, 1.0, _sigmoids(d, value_at_margin, sigmoid))
+
+    return value
+
+def compute_angle_line_plane(p1, p2, plane_normal):
+    # Compute the direction vector of the line
+    line_direction = p2 - p1  # (batch, 3)
+
+    # Normalize the line direction and the plane normal
+    line_direction_normalized = line_direction / torch.norm(line_direction, dim=-1, keepdim=True)  # (batch, 3)
+    plane_normal_normalized = plane_normal / torch.norm(plane_normal, dim=-1, keepdim=True)  # (batch, 3)
+
+    # Compute the dot product between the line direction and the plane normal
+    dot_product = torch.bmm(line_direction_normalized.unsqueeze(1), plane_normal_normalized.unsqueeze(2)).squeeze()  # (batch)
+
+    # Clamp the dot product to avoid numerical issues with acos
+    dot_product_clamped = torch.clamp(dot_product, -1.0, 1.0)
+
+    # Compute the angle between the line direction and the plane normal
+    angle_with_normal = torch.acos(dot_product_clamped)  # (batch)
+
+    # Compute the angle between the line and the plane
+    angle_line_plane = torch.pi / 2 - angle_with_normal  # (batch)
+
+    return angle_line_plane
