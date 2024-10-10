@@ -60,11 +60,11 @@ class RealManInspireGraspABlock:
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.max_episode_length = self.cfg["env"]["episodeLength"]
 
-        self.fingertip_names = ["R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal", "R_thumb_distal"]
-        self.fingertip_adjustment_params = [[[0.15, 0.8, 0.15], 0.05], [[0.15, 0.8, 0.15], 0.055], [[0.2, 0.8, 0.15], 0.05], [[0.2, 0.8, 0.15], 0.045], [[0, 1, 0], 0.02]]
+        self.fingertip_names = ["R_thumb_distal", "R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal"]
+        self.fingertip_adjustment_params = [[[0, 0.5, 0.1], 0.04], [[0.18, 0.9, 0.1], 0.04], [[0.15, 0.9, 0.1], 0.04], [[0.2, 0.9, 0.1], 0.04], [[0.2, 0.8, 0.1], 0.04]]
 
-        self.cfg["env"]["numObservations"] = 129
-        self.cfg["env"]["numStates"] = 129
+        self.cfg["env"]["numObservations"] = 152
+        self.cfg["env"]["numStates"] = 152
         self.cfg["env"]["numActions"] = 13
 
         self.gym = gymapi.acquire_gym()
@@ -112,8 +112,8 @@ class RealManInspireGraspABlock:
                 self.viewer, gymapi.KEY_ESCAPE, "QUIT")
             self.gym.subscribe_viewer_keyboard_event(
                 self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
-            cam_pos = gymapi.Vec3(0.5, -0.1, 1.5)
-            cam_target = gymapi.Vec3(-0.7, -0.1, 0.0)
+            cam_pos = gymapi.Vec3(1, -0.1, 1.5)
+            cam_target = gymapi.Vec3(-0.7, -0.1, 0.5)
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
         # get gym GPU state tensors
@@ -128,8 +128,7 @@ class RealManInspireGraspABlock:
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
         # create some wrapper tensors for different slices
-        self.arm_hand_default_dof_pos = to_torch([3.14, 0.6, 0, 0.6, 0., 0.59, -1.571,
-             0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785, 0.0, -0.174, 0.785], dtype=torch.float, device=self.device)
+        self.arm_hand_default_dof_pos = to_torch([0.0, 0.45, 0.0, 1.78, 0.0, -0.5, -1.571, 0.0, 0, 0.0, 0.0, -0.0, 0.0, 0.0, -0.0, 0.0, 0.0, -0.0, 0.0], dtype=torch.float, device=self.device)
 
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.arm_hand_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_arm_hand_dofs]
@@ -148,8 +147,14 @@ class RealManInspireGraspABlock:
         self.num_dofs = self.gym.get_sim_dof_count(self.sim) // self.num_envs
         print("Num dofs: ", self.num_dofs)
 
+        self.z_unit_tensor = to_torch([0, 0, 1], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
+
+        self.lego_start_pos = self.root_state_tensor[self.lego_indices, 0:3].clone()
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
+        self.E_prev = torch.zeros((self.num_envs), dtype=torch.float, device=self.device)
+        self.base_pos = self.rigid_body_states[:, 0, 0:3].clone()
+        self.lego_pos = self.root_state_tensor[self.lego_indices, 0:3].clone()
 
     def create_sim(self):
         self.sim_params.up_axis = gymapi.UP_AXIS_Z
@@ -206,9 +211,9 @@ class RealManInspireGraspABlock:
         print("self.num_arm_hand_tendons: ", self.num_arm_hand_tendons)
 
         # Set up each DOF.
-        actuated_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
+        actuated_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "R_thumb_MCP_joint1", "R_thumb_MCP_joint2", "R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint"]
         self.actuated_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_dof_names]
-        actuated_hand_dof_names = ["R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint", "R_thumb_MCP_joint2", "R_thumb_MCP_joint1"]
+        actuated_hand_dof_names = ["R_thumb_MCP_joint1", "R_thumb_MCP_joint2", "R_index_MCP_joint", "R_middle_MCP_joint", "R_ring_MCP_joint", "R_pinky_MCP_joint"]
         self.actuated_hand_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_hand_dof_names]
         actuated_arm_dof_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
         self.actuated_arm_dof_indices = [self.gym.find_asset_dof_index(arm_hand_asset, name) for name in actuated_arm_dof_names]
@@ -252,8 +257,8 @@ class RealManInspireGraspABlock:
 
         # Put objects in the scene.
         arm_hand_start_pose = gymapi.Transform()
-        arm_hand_start_pose.p = gymapi.Vec3(-0.15, 0.0, 0.6)
-        arm_hand_start_pose.r = gymapi.Quat().from_euler_zyx(0, 0, 0.0)
+        arm_hand_start_pose.p = gymapi.Vec3(-0.3, 0.0, 0.6)
+        arm_hand_start_pose.r = gymapi.Quat(0, 0, 1, 0)
 
         # create table asset
         table_dims = gymapi.Vec3(1.5, 1.0, 0.6)
@@ -267,7 +272,7 @@ class RealManInspireGraspABlock:
         table_asset = self.gym.create_box(self.sim, table_dims.x, table_dims.y, table_dims.z, table_asset_options)
         table_pose = gymapi.Transform()
         table_pose.p = gymapi.Vec3(0.0, 0.0, 0.5 * table_dims.z)
-        table_pose.r = gymapi.Quat().from_euler_zyx(-0., 0, 0)
+        table_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.0)
 
         lego_path = "urdf/blender/urdf/"
         lego_file_name = '1x2.urdf'
@@ -279,8 +284,8 @@ class RealManInspireGraspABlock:
         lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
 
         lego_start_pose = gymapi.Transform()
-        lego_start_pose.p = gymapi.Vec3(0.25, 0.19, 0.75)
-        lego_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.785)
+        lego_start_pose.p = gymapi.Vec3(0.18, 0.0, 0.6188)
+        lego_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 1.57)
         
 
         # Create actors
@@ -327,8 +332,8 @@ class RealManInspireGraspABlock:
             )
             
             table_shape_props = self.gym.get_actor_rigid_shape_properties(env_ptr, table_handle)
-            for object_shape_prop in table_shape_props:
-                object_shape_prop.friction = 1
+            # for object_shape_prop in table_shape_props:
+            #     object_shape_prop.friction = 1
             self.gym.set_actor_rigid_shape_properties(env_ptr, table_handle, table_shape_props)
 
 
@@ -360,17 +365,50 @@ class RealManInspireGraspABlock:
         self.lego_indices = to_torch(self.lego_indices, dtype=torch.long, device=self.device)
 
     def compute_reward(self):
-        finger_dist = 0
-        for i in [0, 4]:
-            finger_dist += torch.norm(self.lego_pos - self.fingertip_poses[i], p=2, dim=-1)
-        distance_reward = torch.exp(-5 * torch.clamp(finger_dist - 0.15, 0, None))
+        fingers_pos = [self.finger_thumb_pos, self.finger_index_pos, self.finger_middle_pos]
+        fingers_names = ["thumb", "index", "middle"]
+        fingers_weights = [2, 1, 1]
+        distance_reward = 0
+        for i in range(len(fingers_pos)):
+            finger_pos = fingers_pos[i]
+            finger_weight = fingers_weights[i]
+            finger_name = fingers_names[i]
+            finger_dist = torch.norm(self.lego_pos - finger_pos, p=2, dim=-1)
+            print(f"{finger_name} dist:", finger_dist[0])
+            distance_reward += finger_weight * 6 * torch.exp(- 4 * torch.clamp(finger_dist - 0.06, 0, None))
 
-        # define grasp reward
-        lift_reward = 50 * self.lego_pos[:, 2]
+        grasp_fingers_pos = [
+            self.middle_point
+        ]
+        pose_dist = sum([tolerance(point_, self.lego_pos, 0.016, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
+        print("Pose dist:", pose_dist[0])
+        pose_reward = pose_dist * 10
 
-        reward = distance_reward + lift_reward
+        # define angle reward
+        angle_finger = [self.finger_thumb_pos, self.finger_index_pos, self.finger_middle_pos, self.finger_ring_pos, self.finger_pinky_pos]
+        cnt = 0
+        total_angle_dist = 0
+        for i in range(len(angle_finger)):
+            for j in range(i+1, len(angle_finger)):
+                angle_dist = compute_angle_line_plane(angle_finger[i], angle_finger[j], self.z_unit_tensor)
+                total_angle_dist += angle_dist
+                cnt += 1
+        avg_angle_dist = total_angle_dist / cnt
+        angle_reward = torch.exp(-1.0 * torch.abs(avg_angle_dist)) * 1
 
-        print(f"Total reward {reward.mean().item():.2f}")
+        target_lift_height = 0.3
+        target_pos = self.lego_start_pos.clone() + torch.tensor([0, 0, target_lift_height]).repeat(self.num_envs, 1).to(self.device)
+        goal_dist = torch.norm(self.lego_pos - target_pos, p=2, dim=-1)
+        lift_reward = pose_dist * 400 * torch.clamp((target_lift_height- goal_dist), -0.05, None)
+
+        action_penalty = 0.001 * torch.sum(self.actions ** 2, dim=-1)
+
+        total_reward = (distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev) - action_penalty
+        # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - action_penalty
+
+        self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
+
+        print(f"Total reward {total_reward.mean().item():.2f}")
 
         # Fall penalty: distance to the goal is larger than a threshold
         # Check env termination conditions, including maximum success number
@@ -379,7 +417,7 @@ class RealManInspireGraspABlock:
         timed_out = self.progress_buf >= self.max_episode_length - 1
         resets = torch.where(timed_out, torch.ones_like(resets), resets)
         self.reset_buf[:] = resets
-        self.rew_buf[:] = reward
+        self.rew_buf[:] = total_reward
 
 
     def compute_observations(self):
@@ -392,48 +430,71 @@ class RealManInspireGraspABlock:
         self.states_buf[:, 0:19] = unscale(self.arm_hand_dof_pos[:, 0:19],
                                                             self.arm_hand_dof_lower_limits[0:19],
                                                             self.arm_hand_dof_upper_limits[0:19])
-        # self.states_buf[:, 19:38] = self.vel_obs_scale * self.arm_hand_dof_vel[:, 0:19]
-        self.states_buf[:, 19:38] = self.arm_hand_dof_vel[:, 0:19]
+        self.states_buf[:, 19:38] = self.vel_obs_scale * self.arm_hand_dof_vel[:, 0:19]
+        # self.states_buf[:, 19:38] = self.arm_hand_dof_vel[:, 0:19]
 
         # Add finger states
         id = 38
-        
-        self.fingertip_poses = []
-        for i in range(5):
-            pos = self.rigid_body_states[:, self.fingertip_handles[i], 0:3]
-            rot = self.rigid_body_states[:, self.fingertip_handles[i], 3:7]
-            fingertip_pos = pos + quat_apply(rot[:], to_torch(self.fingertip_adjustment_params[i][0], device=self.device).repeat(self.num_envs, 1) * self.fingertip_adjustment_params[i][1])
-            self.fingertip_poses.append(fingertip_pos)
-            self.states_buf[:, id:id+3] = fingertip_pos
-            self.states_buf[:, id+3:id+13] = self.rigid_body_states[:, self.fingertip_handles[i], 3:13]
-            id += 13
+        self.finger_thumb_pos = self.rigid_body_states[:, self.fingertip_handles[0], 0:3]
+        self.finger_thumb_rot = self.rigid_body_states[:, self.fingertip_handles[0], 3:7]
+        self.finger_index_pos = self.rigid_body_states[:, self.fingertip_handles[1], 0:3]
+        self.finger_index_rot = self.rigid_body_states[:, self.fingertip_handles[1], 3:7]
+        self.finger_middle_pos = self.rigid_body_states[:, self.fingertip_handles[2], 0:3]
+        self.finger_middle_rot = self.rigid_body_states[:, self.fingertip_handles[2], 3:7]
+        self.finger_ring_pos = self.rigid_body_states[:, self.fingertip_handles[3], 0:3]
+        self.finger_ring_rot = self.rigid_body_states[:, self.fingertip_handles[3], 3:7]
+        self.finger_pinky_pos = self.rigid_body_states[:, self.fingertip_handles[4], 0:3]
+        self.finger_pinky_rot = self.rigid_body_states[:, self.fingertip_handles[4], 3:7]
 
-        # Add Link7 state
+        self.finger_thumb_pos += quat_apply(self.finger_thumb_rot[:], to_torch([0, 0.5, 0.1], device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.finger_index_pos += quat_apply(self.finger_index_rot[:], to_torch([0.18, 0.9, 0.1], device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.finger_middle_pos+= quat_apply(self.finger_middle_rot[:], to_torch([0.15, 0.9, 0.1],device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.finger_ring_pos  += quat_apply(self.finger_ring_rot[:], to_torch([0.2, 0.9, 0.1],  device=self.device).repeat(self.num_envs, 1) * 0.04)
+        self.finger_pinky_pos += quat_apply(self.finger_pinky_rot[:], to_torch([0.2, 0.8, 0.1], device=self.device).repeat(self.num_envs, 1) * 0.04)
+
+        self.lego_pos = self.root_state_tensor[self.lego_indices, 0:3]
+
+        self.states_buf[:, id+0:id+3] = self.finger_thumb_pos - self.lego_pos 
+        self.states_buf[:, id+3:id+6] = self.finger_index_pos - self.lego_pos
+        self.states_buf[:, id+6:id+9] = self.finger_middle_pos - self.lego_pos 
+        self.states_buf[:, id+9:id+12] = self.finger_ring_pos - self.lego_pos 
+        self.states_buf[:, id+12:id+15] = self.finger_pinky_pos - self.lego_pos 
+        self.middle_point = (self.finger_thumb_pos + self.finger_index_pos + self.finger_middle_pos) / 3
+        self.states_buf[:, id+15:id+18] = self.middle_point - self.lego_pos
+        id += 6 * 3
+
+        for i in range(5):
+            self.states_buf[:, id:id+10] = self.rigid_body_states[:, self.fingertip_handles[i], 3:13]
+            id += 10
+
+        self.states_buf[:, id:id+13] = self.actions
+        id += 13
+
         self.states_buf[:, id:id+13] = self.rigid_body_states[:, self.hand_base_rigid_body_index, 0:13]
         id += 13
 
-        # Add lego target state
-        self.lego_pos = self.root_state_tensor[self.lego_indices, 0:3]  # (num_envs, 3)
-        self.lego_rot = self.root_state_tensor[self.lego_indices, 3:7]
+        self.states_buf[:, id:id+7] = self.root_state_tensor[self.lego_indices, 0:7]
+        id += 7
+
         self.states_buf[:, id:id + 13] = self.root_state_tensor[self.lego_indices, 0:13]
         id += 13
         
         # Clone states buf to obs buf
-        self.obs_buf[:, :] = self.states_buf[:, :]
+        self.obs_buf = self.states_buf
 
 
-        contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
-        contacts = contacts[:, self.sensor_handle_indices, :] # 12
-        contacts = torch.norm(contacts, dim=-1)
-        self.contacts = torch.where(contacts >= 0.1, 1.0, 0.0)
+        # contacts = self.contact_tensor.reshape(self.num_envs, -1, 3)  # 39+27  # TODO
+        # contacts = contacts[:, self.sensor_handle_indices, :] # 12
+        # contacts = torch.norm(contacts, dim=-1)
+        # self.contacts = torch.where(contacts >= 0.1, 1.0, 0.0)
 
-        for i in range(len(self.contacts[0])):
-            if self.contacts[0][i] == 1.0:
-                self.gym.set_rigid_body_color(
-                            self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 0.3, 0.3))
-            else:
-                self.gym.set_rigid_body_color(
-                            self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
+        # for i in range(len(self.contacts[0])):
+        #     if self.contacts[0][i] == 1.0:
+        #         self.gym.set_rigid_body_color(
+        #                     self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 0.3, 0.3))
+        #     else:
+        #         self.gym.set_rigid_body_color(
+        #                     self.envs[0], self.hand_indices[0], self.sensor_handle_indices[i], gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
     def reset_idx(self, env_ids):
         # reset object
@@ -480,6 +541,8 @@ class RealManInspireGraspABlock:
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
+
+        self.lego_start_pos[env_ids, :] = self.root_state_tensor[self.lego_indices[env_ids], 0:3].clone()
 
         print("post_reset finish")
 
@@ -756,7 +819,7 @@ def tolerance(x, y, r, margin=0.0, sigmoid='gaussian', value_at_margin=_DEFAULT_
         value = torch.where(in_bounds, 1.0, 0.0)
     else:
         d = (distance - r) / margin
-
+        
         value = torch.where(in_bounds, 1.0, _sigmoids(d, value_at_margin, sigmoid))
 
     return value

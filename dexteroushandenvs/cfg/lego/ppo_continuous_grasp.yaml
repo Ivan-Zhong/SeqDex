@@ -53,7 +53,7 @@ params:
     lr_schedule:  adaptive
     kl_threshold: 0.02
 
-    max_epochs: 3100
+    max_epochs: 10000
     save_frequency: 1000
     save_best_after: 200
     games_to_track: 8
