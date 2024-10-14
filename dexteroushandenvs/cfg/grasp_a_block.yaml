@@ -1,6 +1,6 @@
 # if given, will override the device setting in gym. 
 env: 
-  env_name: "realman_inspire_grasp_a_block"
+  env_name: "grasp_a_block"
   numEnvs: 1
   envSpacing: 1.25
   episodeLength: 210
