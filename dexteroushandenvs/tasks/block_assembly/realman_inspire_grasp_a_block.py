@@ -39,7 +39,7 @@ from scipy.spatial.transform import Rotation as R
 import warnings
 
 
-class RealManInspireGraspABlock:
+class GraspABlock:
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
 

@@ -42,7 +42,7 @@ if __name__ == '__main__':
         config_name = "cfg/{}/ppo_continuous.yaml".format(args.algo)
     elif args.algo == "lego":
         config_name = "cfg/{}/ppo_continuous.yaml".format(args.algo)
-        if args.task in ["RealManInspireBlockAssemblySearch", "RealManInspireGraspABlock", "BlockAssemblySearch", "BlockAssemblyGrasp", "BlockAssemblyGraspSim", "BlockAssemblyOrient", "BlockAssemblyOrientOnce",
+        if args.task in ["RealManInspireBlockAssemblySearch", "GraspABlock", "BlockAssemblySearch", "BlockAssemblyGrasp", "BlockAssemblyGraspSim", "BlockAssemblyOrient", "BlockAssemblyOrientOnce",
                          "ToolPositioningChainPureRL", "ToolPositioningChainTSTAR", "ToolPositioningChain", "ToolPositioningOrient", "ToolPositioningGrasp"]:
             config_name = "cfg/{}/ppo_continuous_grasp.yaml".format(args.algo)
         if args.task in ["BlockAssemblyInsert", "BlockAssemblyInsertSim"]:
