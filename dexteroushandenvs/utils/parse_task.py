@@ -15,6 +15,7 @@ from tasks.block_assembly.allegro_hand_block_assembly_orient import BlockAssembl
 from tasks.block_assembly.allegro_hand_block_assembly_search import BlockAssemblySearch
 from tasks.block_assembly.realman_inspire_block_assembly_search import RealManInspireBlockAssemblySearch
 from tasks.block_assembly.grasp_a_block import GraspABlock
+from tasks.block_assembly.search import Search
 
 from tasks.tool_positioning.allegro_hand_tool_positioning_chain import ToolPositioningChain
 from tasks.tool_positioning.allegro_hand_tool_positioning_chain_pure_rl import ToolPositioningChainPureRL
