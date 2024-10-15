@@ -5,7 +5,7 @@ env:
   envSpacing: 1.25
   episodeLength: 210
   aggregateMode: 1
-  dofSpeedScale: 3.0
+  dofSpeedScale: 5.0
   actionsMovingAverage: 0.8
   handAgentIndex: "[[0, 1, 2, 3, 4, 5]]"
   asset:

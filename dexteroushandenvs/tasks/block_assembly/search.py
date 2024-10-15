@@ -63,8 +63,8 @@ class Search:
         self.fingertip_names = ["R_thumb_distal", "R_index_distal", "R_middle_distal", "R_ring_distal", "R_pinky_distal"]
         self.fingertip_adjustment_params = [[[0, 0.5, 0.1], 0.04], [[0.18, 0.9, 0.1], 0.04], [[0.15, 0.9, 0.1], 0.04], [[0.2, 0.9, 0.1], 0.04], [[0.2, 0.8, 0.1], 0.04]]
 
-        self.cfg["env"]["numObservations"] = 153
-        self.cfg["env"]["numStates"] = 153
+        self.cfg["env"]["numObservations"] = 154
+        self.cfg["env"]["numStates"] = 154
         self.cfg["env"]["numActions"] = 13
 
         self.gym = gymapi.acquire_gym()
@@ -149,12 +149,15 @@ class Search:
 
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
+        self.delta_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.E_prev = torch.zeros((self.num_envs), dtype=torch.float, device=self.device)
         self.base_pos = self.rigid_body_states[:, 0, 0:3].clone()
         self.segmentation_target_init_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
         self.segmentation_target_init_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
         self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
         self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
+        self.last_all_lego_pos = self.root_state_tensor[self.lego_indices, 0:3].clone()  # (num_envs, 132, 3)
+        self.now_all_lego_pos = self.root_state_tensor[self.lego_indices, 0:3].clone()  # (num_envs, 132, 3)
 
     def create_sim(self):
         self.sim_params.up_axis = gymapi.UP_AXIS_Z
@@ -521,6 +524,7 @@ class Search:
         self.segmentation_types = torch.concat(self.segmentation_types, dim=0)
 
     def compute_reward(self):
+
         fingers_pos = [self.finger_thumb_pos, self.finger_index_pos, self.finger_middle_pos]
         fingers_names = ["thumb", "index", "middle"]
         fingers_weights = [2, 1, 1]
@@ -531,40 +535,38 @@ class Search:
             finger_name = fingers_names[i]
             finger_dist = torch.norm(self.seg_lego_pos - finger_pos, p=2, dim=-1)
             print(f"{finger_name} dist:", finger_dist[0])
-            distance_reward += finger_weight * 6 * torch.exp(- 4 * torch.clamp(finger_dist - 0.06, 0, None))
+            distance_reward += finger_weight * 10 * torch.exp(- 4 * torch.clamp(finger_dist - 0.1, 0, None))
 
         grasp_fingers_pos = [
             self.middle_point
         ]
-        pose_dist = sum([tolerance(point_, self.seg_lego_pos, 0.016, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
+        pose_dist = sum([tolerance(point_, self.seg_lego_pos, 0.05, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
         print("Pose dist:", pose_dist[0])
-        pose_reward = pose_dist * 10
+        pose_reward = pose_dist * 20
 
-        # define angle reward
-        angle_finger = [self.finger_thumb_pos, self.finger_index_pos, self.finger_middle_pos, self.finger_ring_pos, self.finger_pinky_pos]
-        cnt = 0
-        total_angle_dist = 0
-        for i in range(len(angle_finger)):
-            for j in range(i+1, len(angle_finger)):
-                angle_dist = compute_angle_line_plane(angle_finger[i], angle_finger[j], self.z_unit_tensor)
-                total_angle_dist += angle_dist
-                cnt += 1
-        avg_angle_dist = total_angle_dist / cnt
-        angle_reward = torch.exp(-1.0 * torch.abs(avg_angle_dist)) * 1
+        cover_penalty = self.cover_penalty.squeeze(-1) * 40
 
-        target_lift_height = 0.3
-        target_pos = self.segmentation_target_init_pos.clone() + torch.tensor([0, 0, target_lift_height]).repeat(self.num_envs, 1).to(self.device)
-        goal_dist = torch.norm(self.seg_lego_pos - target_pos, p=2, dim=-1)
-        lift_reward = pose_dist * 400 * torch.clamp((target_lift_height- goal_dist), -0.05, None)
+        action_reward = torch.norm(self.delta_targets, p=2, dim=-1)
 
-        action_penalty = 0.001 * torch.sum(self.actions ** 2, dim=-1)
+        cover_block_movement_reward = self.cover_block_movement_reward.squeeze(-1) * 200
 
-        total_reward = (distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev) - action_penalty
-        # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - action_penalty
 
-        self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
+        # total_reward = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward
+        total_reward = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward - self.E_prev
 
+        # self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
+        self.E_prev = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward
+
+        # Print all reward in a good format
+
+        print("#####################################")
+        print(f"Distance reward {distance_reward.mean().item():.2f}")
+        print(f"Pose reward {pose_reward.mean().item():.2f}")
+        print(f"Cover penalty {cover_penalty.mean().item():.2f}")
+        print(f"Action reward {action_reward.mean().item():.2f}")
+        print(f"Cover block movement reward {cover_block_movement_reward.mean().item():.2f}")
         print(f"Total reward {total_reward.mean().item():.2f}")
+        print("#####################################")
 
         # Fall penalty: distance to the goal is larger than a threshold
         # Check env termination conditions, including maximum success number
@@ -634,6 +636,26 @@ class Search:
 
         self.states_buf[:, id:id + 8] = self.segmentation_types
         id += 8
+
+        self.now_all_lego_pos = self.root_state_tensor[self.lego_indices, 0:3]  # (num_envs, 132, 3)
+        target_pos = self.seg_lego_pos.unsqueeze(1)
+        condition = (torch.abs(self.now_all_lego_pos[:, :, :2] - target_pos[:, :, :2]) < 0.06).all(dim=2) \
+                    & (self.now_all_lego_pos[:, :, 2] > (target_pos[:, :, 2] + 1e-5))  # (num_envs, 132)
+        
+        self.is_covered = torch.any(condition, dim=1, keepdim=True).float()
+        self.states_buf[:, id:id + 1] = self.is_covered
+        id += 1
+
+        legos_dist = torch.norm(self.now_all_lego_pos - target_pos, p=2, dim=2)  # (num_envs, 132)
+        cover_penalty_per_block = torch.where(condition, legos_dist - 0.2, 0.0)  # (num_envs, 132)
+        self.cover_penalty = torch.sum(cover_penalty_per_block, dim=1, keepdim=True)  # (num_envs, 1)
+
+        legos_movement = torch.norm(self.now_all_lego_pos - self.last_all_lego_pos, p=2, dim=2)  # (num_envs, 132)
+        legos_movement_reward_per_block = torch.where(condition, legos_movement - 0.03, legos_movement * 0.1)  # (num_envs, 132)
+        self.cover_block_movement_reward = torch.sum(legos_movement_reward_per_block, dim=1, keepdim=True)  # (num_envs, 1)
+
+
+        self.last_all_lego_pos[:, :, :] = self.now_all_lego_pos[:, :, :]
 
         # Clone states buf to obs buf
         self.obs_buf = self.states_buf
@@ -714,6 +736,9 @@ class Search:
         self.segmentation_target_init_pos[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0:3].clone()
         self.segmentation_target_init_rot[env_ids] = self.root_state_tensor[self.lego_segmentation_indices[env_ids], 3:7].clone()
 
+        self.last_all_lego_pos[env_ids] = self.root_state_tensor[self.lego_indices[env_ids], 0:3].clone()
+        self.now_all_lego_pos[env_ids] = self.root_state_tensor[self.lego_indices[env_ids], 0:3].clone()
+
         print("post_reset finish")
 
     def pre_physics_step(self, actions):
@@ -739,6 +764,8 @@ class Search:
         self.cur_targets[:, :] = tensor_clamp(self.cur_targets[:, :],
                                                 self.arm_hand_dof_lower_limits[:],
                                                 self.arm_hand_dof_upper_limits[:])
+
+        self.delta_targets[:, :] = self.cur_targets[:, :] - self.prev_targets[:, :]
 
         self.prev_targets[:, :] = self.cur_targets[:, :]
         self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.cur_targets))
