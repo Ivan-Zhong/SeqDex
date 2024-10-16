@@ -27,8 +27,8 @@
     <mesh name="link5" file="link5.STL"/>
     <mesh name="link6" file="link6.STL"/>
     <mesh name="link7" file="link7.STL"/>
-    <mesh name="camera_connector" file="camera_connector.stl" scale="0.001 0.001 0.001"/>
-    <mesh name="connector" file="connector.stl" scale="0.001 0.001 0.001"/>
+    <!-- <mesh name="camera_connector" file="camera_connector.stl" scale="0.001 0.001 0.001"/> -->
+    <!-- <mesh name="connector" file="connector.stl" scale="0.001 0.001 0.001"/> -->
   </asset>
 
   <default>
@@ -113,9 +113,9 @@
                     <joint name="joint7" pos="0 0 0" axis="0 0 1" range="-6.28 6.28"/>
                     <geom type="mesh" rgba="1 1 1 1" mesh="link7"/>
                     <geom class="visual" type="mesh" rgba="1 1 1 1" mesh="link7"/>
-                    <geom type="mesh" rgba="1 1 1 1" pos="0 0 0.0" euler="1.571 1.571 0.0" mesh="camera_connector"/>
-                    <geom class="visual" type="mesh" pos="0 0 0.0" euler="1.571 1.571 0.0" rgba="1 1 1 1" mesh="camera_connector"/>
-                    <geom class="visual" type="mesh" pos="0 0 0.012" quat="0.707107 0.707107 0 0" rgba="1 1 1 1" mesh="connector"/>
+                    <!-- <geom type="mesh" rgba="1 1 1 1" pos="0 0 0.0" euler="1.571 1.571 0.0" mesh="camera_connector"/> -->
+                    <!-- <geom class="visual" type="mesh" pos="0 0 0.0" euler="1.571 1.571 0.0" rgba="1 1 1 1" mesh="camera_connector"/> -->
+                    <!-- <geom class="visual" type="mesh" pos="0 0 0.012" quat="0.707107 0.707107 0 0" rgba="1 1 1 1" mesh="connector"/> -->
 
                     <!-- <body childclass="right_hand" pos="0.078 0.248 0.08" quat="0.707107 0.707107 0 0"> -->
                     <body childclass="right_hand" pos="0.078 0.248 0.1" quat="0.707107 0.707107 0 0">

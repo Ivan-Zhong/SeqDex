@@ -29,7 +29,6 @@
 import sys
 import os
 import math
-import random
 
 import numpy as np
 import torch
@@ -154,8 +153,6 @@ class Search:
         self.base_pos = self.rigid_body_states[:, 0, 0:3].clone()
         self.segmentation_target_init_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
         self.segmentation_target_init_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
-        self.segmentation_target_pos = self.root_state_tensor[self.lego_segmentation_indices, 0:3].clone()
-        self.segmentation_target_rot = self.root_state_tensor[self.lego_segmentation_indices, 3:7].clone()
         self.last_all_lego_pos = self.root_state_tensor[self.lego_indices, 0:3].clone()  # (num_envs, 132, 3)
         self.now_all_lego_pos = self.root_state_tensor[self.lego_indices, 0:3].clone()  # (num_envs, 132, 3)
 
@@ -334,7 +331,7 @@ class Search:
         lego_asset_options.thickness = 0.00001
         lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
         # lego_asset_options.density = 300.0
-        for n in range(9):
+        for n in range(16):
             for i, lego_file_name in enumerate(all_lego_files_name):
                 lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
 
@@ -348,63 +345,6 @@ class Search:
                 
                 lego_assets.append(lego_asset)
                 lego_start_poses.append(lego_start_pose)
-
-        lego_asset_options = gymapi.AssetOptions()
-        lego_asset_options.disable_gravity = False
-        lego_asset_options.fix_base_link = True
-        lego_asset_options.thickness = 0.001
-        lego_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        # lego_asset_options.density = 2000
-        flat_lego_begin = len(lego_assets)        
-        ran_list = [0 ,0 ,0, 1, 2, 2]
-        lego_list = [0, 5, 6]
-        bianchang = [0.03, 0.045, 0.06]        
-        for j in range(10):
-            random.shuffle(ran_list)
-            lego_center = [0.254 - bianchang[ran_list[0]] + 0.25, 0.175 + 0.19 - 0.039 * j, 0.63]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0] , lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[0]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[0]] + bianchang[ran_list[1]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[1]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[1]] + bianchang[ran_list[2]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[2]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[2]] + bianchang[ran_list[3]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[3]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[3]] + bianchang[ran_list[4]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[4]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)            
-            lego_center = [lego_center[0] - (bianchang[ran_list[4]] + bianchang[ran_list[5]] + 0.006), lego_center[1], lego_center[2]]
-            lego_start_pose = gymapi.Transform()
-            lego_start_pose.p = gymapi.Vec3(lego_center[0], lego_center[1], lego_center[2])
-            lego_file_name = all_lego_files_name[lego_list[ran_list[5]]]
-            lego_asset = self.gym.load_asset(self.sim, asset_root, lego_path + lego_file_name, lego_asset_options)
-            lego_assets.append(lego_asset)
-            lego_start_poses.append(lego_start_pose)        
-        
-        flat_lego_end = len(lego_assets)
 
         # Lego board
         extra_lego_asset_options = gymapi.AssetOptions()
@@ -497,8 +437,6 @@ class Search:
                 lego_idx.append(idx)
 
                 color = color_map[lego_i % 8]
-                if flat_lego_end > lego_i >= flat_lego_begin:
-                    color = color_map[random.randint(0, 7)]
                 self.gym.set_rigid_body_color(env_ptr, lego_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(color[0], color[1], color[2]))
             self.lego_indices.append(lego_idx)
 
@@ -535,20 +473,20 @@ class Search:
             finger_name = fingers_names[i]
             finger_dist = torch.norm(self.seg_lego_pos - finger_pos, p=2, dim=-1)
             print(f"{finger_name} dist:", finger_dist[0])
-            distance_reward += finger_weight * 10 * torch.exp(- 4 * torch.clamp(finger_dist - 0.1, 0, None))
+            distance_reward += finger_weight * 10 * torch.exp(- 4 * torch.clamp(finger_dist - 0.15, 0, None))
 
         grasp_fingers_pos = [
             self.middle_point
         ]
-        pose_dist = sum([tolerance(point_, self.seg_lego_pos, 0.05, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
+        pose_dist = sum([tolerance(point_, self.seg_lego_pos, 0.15, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
         print("Pose dist:", pose_dist[0])
         pose_reward = pose_dist * 20
 
-        cover_penalty = self.cover_penalty.squeeze(-1) * 40
+        cover_penalty = self.cover_penalty.squeeze(-1) * 50
 
         action_reward = torch.norm(self.delta_targets, p=2, dim=-1)
 
-        cover_block_movement_reward = self.cover_block_movement_reward.squeeze(-1) * 200
+        cover_block_movement_reward = self.cover_block_movement_reward.squeeze(-1) * 400
 
 
         # total_reward = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward
@@ -651,7 +589,7 @@ class Search:
         self.cover_penalty = torch.sum(cover_penalty_per_block, dim=1, keepdim=True)  # (num_envs, 1)
 
         legos_movement = torch.norm(self.now_all_lego_pos - self.last_all_lego_pos, p=2, dim=2)  # (num_envs, 132)
-        legos_movement_reward_per_block = torch.where(condition, legos_movement - 0.03, legos_movement * 0.1)  # (num_envs, 132)
+        legos_movement_reward_per_block = torch.where(condition, legos_movement - 0.03, legos_movement * 0.5)  # (num_envs, 132)
         self.cover_block_movement_reward = torch.sum(legos_movement_reward_per_block, dim=1, keepdim=True)  # (num_envs, 1)
 
 
@@ -676,10 +614,10 @@ class Search:
 
     def reset_idx(self, env_ids):
         # generate random values
-        rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
+        rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), 2), device=self.device)
         
-        lego_init_rand_floats = torch_rand_float(-1.0, 1.0, (self.num_envs * 132, 3), device=self.device)
-        lego_init_rand_floats.view(self.num_envs, 132, 3)[:, 72:, :] = 0
+        lego_init_rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids) * 128, 3), device=self.device)
+        # lego_init_rand_floats.view(self.num_envs, 132, 3)[:, 72:, :] = 0
 
         # reset object
         self.root_state_tensor[self.lego_indices[env_ids].view(-1), 0:7] = self.lego_init_states[env_ids].view(-1, 13)[:, 0:7].clone()
@@ -689,7 +627,7 @@ class Search:
 
         # randomize segmentation object
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 0] = 0.25 + rand_floats[env_ids, 0] * 0.2
-        self.root_state_tensor[self.lego_segmentation_indices[env_ids], 1] = 0.19 + rand_floats[env_ids, 0] * 0.15
+        self.root_state_tensor[self.lego_segmentation_indices[env_ids], 1] = 0.19 + rand_floats[env_ids, 1] * 0.15
         self.root_state_tensor[self.lego_segmentation_indices[env_ids], 2] = 0.9
 
         lego_ind = self.lego_indices[env_ids].view(-1).to(torch.int32)
@@ -721,7 +659,7 @@ class Search:
 
     def post_reset(self, env_ids, hand_indices):
         # step physics and render each frame
-        for _ in range(40):
+        for _ in range(60):
             self.render()
             self.gym.simulate(self.sim)
         
