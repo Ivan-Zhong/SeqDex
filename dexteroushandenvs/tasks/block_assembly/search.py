@@ -480,20 +480,25 @@ class Search:
         ]
         pose_dist = sum([tolerance(point_, self.seg_lego_pos, 0.15, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
         print("Pose dist:", pose_dist[0])
-        pose_reward = pose_dist * 20
+        pose_reward = pose_dist * 10
 
-        cover_penalty = self.cover_penalty.squeeze(-1) * 50
+        cover_penalty = self.cover_penalty.squeeze(-1) * 400
 
-        action_reward = torch.norm(self.delta_targets, p=2, dim=-1)
+        action_reward = torch.norm(self.delta_targets, p=2, dim=-1) * 2
 
-        cover_block_movement_reward = self.cover_block_movement_reward.squeeze(-1) * 400
+        block_movement_reward = self.block_movement_reward.squeeze(-1) * 1000
 
+        block_linvel_reward = self.block_linvel_reward.squeeze(-1) * 0.05
 
-        # total_reward = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward
-        total_reward = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward - self.E_prev
+        block_angvel_reward = self.block_angvel_reward.squeeze(-1) * 0.005
+
+        lift_reward = (1 + pose_dist) * 400 * torch.clamp((self.seg_lego_pos[:, 2] - self.segmentation_target_init_pos[:, 2]), 0, None)
+
+        # total_reward = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward
+        total_reward = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward + block_linvel_reward + block_angvel_reward + lift_reward - self.E_prev
 
         # self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
-        self.E_prev = distance_reward + pose_reward + cover_penalty + action_reward + cover_block_movement_reward
+        self.E_prev = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward + block_linvel_reward + block_angvel_reward + lift_reward
 
         # Print all reward in a good format
 
@@ -502,7 +507,10 @@ class Search:
         print(f"Pose reward {pose_reward.mean().item():.2f}")
         print(f"Cover penalty {cover_penalty.mean().item():.2f}")
         print(f"Action reward {action_reward.mean().item():.2f}")
-        print(f"Cover block movement reward {cover_block_movement_reward.mean().item():.2f}")
+        print(f"Block movement reward {block_movement_reward.mean().item():.2f}")
+        print(f"Block linvel reward {block_linvel_reward.mean().item():.2f}")
+        print(f"Block angvel reward {block_angvel_reward.mean().item():.2f}")
+        print(f"Lift reward {lift_reward.mean().item():.2f}")
         print(f"Total reward {total_reward.mean().item():.2f}")
         print("#####################################")
 
@@ -589,8 +597,19 @@ class Search:
         self.cover_penalty = torch.sum(cover_penalty_per_block, dim=1, keepdim=True)  # (num_envs, 1)
 
         legos_movement = torch.norm(self.now_all_lego_pos - self.last_all_lego_pos, p=2, dim=2)  # (num_envs, 132)
-        legos_movement_reward_per_block = torch.where(condition, legos_movement - 0.03, legos_movement * 0.5)  # (num_envs, 132)
-        self.cover_block_movement_reward = torch.sum(legos_movement_reward_per_block, dim=1, keepdim=True)  # (num_envs, 1)
+        legos_movement_reward_per_block = torch.where(condition, legos_movement - 0.03, legos_movement * 0.2)  # (num_envs, 132)
+        self.block_movement_reward = torch.sum(legos_movement_reward_per_block, dim=1, keepdim=True)  # (num_envs, 1)
+
+        self.now_all_lego_linvel = self.root_state_tensor[self.lego_indices, 7:10]  # (num_envs, 132, 3)
+        self.now_all_lego_angvel = self.root_state_tensor[self.lego_indices, 10:13]  # (num_envs, 132, 3)
+        now_all_lego_linvel_norm = torch.norm(self.now_all_lego_linvel, p=2, dim=2)  # (num_envs, 132)
+        now_all_lego_angvel_norm = torch.norm(self.now_all_lego_angvel, p=2, dim=2)  # (num_envs, 132)
+        print("now_all_lego_linvel_norm max:", now_all_lego_linvel_norm.max().item())
+        print("now_all_lego_angvel_norm max:", now_all_lego_angvel_norm.max().item())
+        # linvel_reward_per_block = torch.where(condition, now_all_lego_linvel_norm, now_all_lego_linvel_norm * 0.1)  # (num_envs, 132)
+        # angvel_reward_per_block = torch.where(condition, now_all_lego_angvel_norm, now_all_lego_angvel_norm * 0.1)  # (num_envs, 132)
+        self.block_linvel_reward = torch.sum(now_all_lego_linvel_norm, dim=1, keepdim=True)
+        self.block_angvel_reward = torch.sum(now_all_lego_angvel_norm, dim=1, keepdim=True)
 
 
         self.last_all_lego_pos[:, :, :] = self.now_all_lego_pos[:, :, :]
@@ -659,7 +678,7 @@ class Search:
 
     def post_reset(self, env_ids, hand_indices):
         # step physics and render each frame
-        for _ in range(60):
+        for _ in range(80):
             self.render()
             self.gym.simulate(self.sim)
         
