@@ -484,21 +484,22 @@ class Search:
 
         cover_penalty = self.cover_penalty.squeeze(-1) * 400
 
-        action_reward = torch.norm(self.delta_targets, p=2, dim=-1) * 2
+        # action_reward = torch.norm(self.delta_targets, p=2, dim=-1) * 2
 
-        block_movement_reward = self.block_movement_reward.squeeze(-1) * 1000
+        # block_movement_reward = self.block_movement_reward.squeeze(-1) * 1000
 
-        block_linvel_reward = self.block_linvel_reward.squeeze(-1) * 0.05
+        # block_linvel_reward = self.block_linvel_reward.squeeze(-1) * 0.05
 
-        block_angvel_reward = self.block_angvel_reward.squeeze(-1) * 0.005
+        # block_angvel_reward = self.block_angvel_reward.squeeze(-1) * 0.005
 
         lift_reward = (1 + pose_dist) * 400 * torch.clamp((self.seg_lego_pos[:, 2] - self.segmentation_target_init_pos[:, 2]), 0, None)
 
         # total_reward = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward
-        total_reward = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward + block_linvel_reward + block_angvel_reward + lift_reward - self.E_prev
+        total_reward = distance_reward + pose_reward + cover_penalty + lift_reward
+        # total_reward = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward + block_linvel_reward + block_angvel_reward + lift_reward - self.E_prev
 
         # self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
-        self.E_prev = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward + block_linvel_reward + block_angvel_reward + lift_reward
+        # self.E_prev = distance_reward + pose_reward + cover_penalty + action_reward + block_movement_reward + block_linvel_reward + block_angvel_reward + lift_reward
 
         # Print all reward in a good format
 
@@ -506,10 +507,10 @@ class Search:
         print(f"Distance reward {distance_reward.mean().item():.2f}")
         print(f"Pose reward {pose_reward.mean().item():.2f}")
         print(f"Cover penalty {cover_penalty.mean().item():.2f}")
-        print(f"Action reward {action_reward.mean().item():.2f}")
-        print(f"Block movement reward {block_movement_reward.mean().item():.2f}")
-        print(f"Block linvel reward {block_linvel_reward.mean().item():.2f}")
-        print(f"Block angvel reward {block_angvel_reward.mean().item():.2f}")
+        # print(f"Action reward {action_reward.mean().item():.2f}")
+        # print(f"Block movement reward {block_movement_reward.mean().item():.2f}")
+        # print(f"Block linvel reward {block_linvel_reward.mean().item():.2f}")
+        # print(f"Block angvel reward {block_angvel_reward.mean().item():.2f}")
         print(f"Lift reward {lift_reward.mean().item():.2f}")
         print(f"Total reward {total_reward.mean().item():.2f}")
         print("#####################################")
