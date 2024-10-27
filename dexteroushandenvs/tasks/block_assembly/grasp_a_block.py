@@ -394,16 +394,18 @@ class GraspABlock:
                 total_angle_dist += angle_dist
                 cnt += 1
         avg_angle_dist = total_angle_dist / cnt
-        angle_reward = torch.exp(-1.0 * torch.abs(avg_angle_dist)) * 1
+        angle_reward = torch.exp(-1.0 * torch.abs(avg_angle_dist)) * 10
 
-        target_lift_height = 0.3
-        target_pos = self.lego_start_pos.clone() + torch.tensor([0, 0, target_lift_height]).repeat(self.num_envs, 1).to(self.device)
-        goal_dist = torch.norm(self.lego_pos - target_pos, p=2, dim=-1)
-        lift_reward = pose_dist * 400 * torch.clamp((target_lift_height- goal_dist), -0.05, None)
+        # target_lift_height = 0.3
+        # target_pos = self.lego_start_pos.clone() + torch.tensor([0, 0, target_lift_height]).repeat(self.num_envs, 1).to(self.device)
+        # goal_dist = torch.norm(self.lego_pos - target_pos, p=2, dim=-1)
+        # lift_reward = pose_dist * 400 * torch.clamp((target_lift_height- goal_dist), -0.05, None)
 
-        action_penalty = 0.001 * torch.sum(self.actions ** 2, dim=-1)
+        lift_reward = pose_dist * 400 * torch.clamp((self.lego_pos[:, 2] - self.lego_start_pos[:, 2]), 0, None)
 
-        total_reward = (distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev) - action_penalty
+        # action_penalty = 0.001 * torch.sum(self.actions ** 2, dim=-1)
+
+        total_reward = distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev
         # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - action_penalty
 
         self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
