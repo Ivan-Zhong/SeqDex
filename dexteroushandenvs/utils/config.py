@@ -17,6 +17,14 @@ import random
 import torch
 
 
+def str2bool(string: str) -> bool:
+    """Convert a string literal to a boolean value."""
+    if string.lower() in {'1', 'true', 't', 'yes', 'y', 'on'}:
+        return True
+    if string.lower() in {'0', 'false', 'f', 'no', 'n', 'off'}:
+        return False
+    return bool(string)
+
 def set_np_formatting():
     np.set_printoptions(edgeitems=30, infstr='inf',
                         linewidth=4000, nanstr='nan', precision=2,
@@ -278,6 +286,7 @@ def get_args(benchmark=False, use_rlg_config=False):
             "help": "Only for policy sequencing"},
         {"name": "--record_lego_type", "type": int, "default": 0,
             "help": "Only for policy sequencing"},
+        {"name": "--use_rlgames", "type": str2bool, "default": True,}
         ]
 
     if benchmark:

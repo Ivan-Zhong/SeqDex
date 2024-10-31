@@ -5,6 +5,8 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
+import time
+
 from ast import arg
 from matplotlib.pyplot import get
 import numpy as np
@@ -26,6 +28,8 @@ import yaml
 
 # from utils.rl_games_custom import 
 from rl_games.common.algo_observer import IsaacAlgoObserver
+
+from ppo.runner import PPORunner
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
@@ -74,21 +78,31 @@ if __name__ == '__main__':
     cfg["record_lego_type"] = args.record_lego_type
     task, env = parse_task(args, cfg, cfg_train, sim_params, agent_index)
 
-    # override
-    with open(config_name, 'r') as stream:
-        rlgames_cfg = yaml.safe_load(stream)
-        rlgames_cfg['params']['config']['name'] = args.task
-        rlgames_cfg['params']['config']['num_actors'] = env.num_environments
-        rlgames_cfg['params']['seed'] = cfg_train["seed"]
-        rlgames_cfg['params']['config']['env_config']['seed'] = cfg_train["seed"]
-        rlgames_cfg['params']['config']['vec_env'] = env
-        rlgames_cfg['params']['config']['env_info'] = env.get_env_info()
+    if args.use_rlgames:
+        # override
+        with open(config_name, 'r') as stream:
+            rlgames_cfg = yaml.safe_load(stream)
+            rlgames_cfg['params']['config']['name'] = args.task
+            rlgames_cfg['params']['config']['num_actors'] = env.num_environments
+            rlgames_cfg['params']['seed'] = cfg_train["seed"]
+            rlgames_cfg['params']['config']['env_config']['seed'] = cfg_train["seed"]
+            rlgames_cfg['params']['config']['vec_env'] = env
+            rlgames_cfg['params']['config']['env_info'] = env.get_env_info()
 
-    vargs = vars(args)
-    algo_observer = IsaacAlgoObserver()
+        vargs = vars(args)
+        algo_observer = IsaacAlgoObserver()
+        
+        runner = Runner(algo_observer)
+        # runner = Runner()
+        runner.load(rlgames_cfg)
+        runner.reset()
+        runner.run(vargs)
     
-    runner = Runner(algo_observer)
-    # runner = Runner()
-    runner.load(rlgames_cfg)
-    runner.reset()
-    runner.run(vargs)
+    else:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(current_dir, 'results', f"{args.task}-{time.strftime('%Y%m%d-%H%M%S')}")
+        os.makedirs(output_dir)
+        runner = PPORunner(env, args.num_envs, output_dir)
+        runner.run()
+
+        

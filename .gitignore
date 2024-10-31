@@ -131,6 +131,7 @@ dmypy.json
 dexteroushandenvs/logs/
 # contact buffer and other info created in running
 dexteroushandenvs/runs
+dexteroushandenvs/results
 # too large files in assets
 assets/dataset
 

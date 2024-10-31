@@ -374,14 +374,14 @@ class GraspABlock:
             finger_weight = fingers_weights[i]
             finger_name = fingers_names[i]
             finger_dist = torch.norm(self.lego_pos - finger_pos, p=2, dim=-1)
-            print(f"{finger_name} dist:", finger_dist[0])
+            # print(f"{finger_name} dist:", finger_dist[0])
             distance_reward += finger_weight * 6 * torch.exp(- 4 * torch.clamp(finger_dist - 0.06, 0, None))
 
         grasp_fingers_pos = [
             self.middle_point
         ]
         pose_dist = sum([tolerance(point_, self.lego_pos, 0.016, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
-        print("Pose dist:", pose_dist[0])
+        # print("Pose dist:", pose_dist[0])
         pose_reward = pose_dist * 10
 
         # define angle reward
@@ -410,13 +410,13 @@ class GraspABlock:
 
         self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
 
-        print(f"Total reward {total_reward.mean().item():.2f}")
+        # print(f"Total reward {total_reward.mean().item():.2f}")
 
         # Fall penalty: distance to the goal is larger than a threshold
         # Check env termination conditions, including maximum success number
         resets = self.reset_buf
 
-        timed_out = self.progress_buf >= self.max_episode_length - 1
+        timed_out = self.progress_buf >= self.max_episode_length
         resets = torch.where(timed_out, torch.ones_like(resets), resets)
         self.reset_buf[:] = resets
         self.rew_buf[:] = total_reward

@@ -132,7 +132,7 @@ class VecTaskCPU(VecTask):
 class VecTaskGPU(VecTask):
     def __init__(self, task, rl_device, clip_observations=5.0, clip_actions=1.0):
         super().__init__(task, rl_device, clip_observations=clip_observations, clip_actions=clip_actions)
-
+    
         self.obs_tensor = gymtorch.wrap_tensor(self.task.obs_tensor, counts=(self.task.num_envs, self.task.num_obs))
         self.rewards_tensor = gymtorch.wrap_tensor(self.task.rewards_tensor, counts=(self.task.num_envs,))
         self.resets_tensor = gymtorch.wrap_tensor(self.task.resets_tensor, counts=(self.task.num_envs,))
