@@ -405,10 +405,11 @@ class GraspABlock:
 
         # action_penalty = 0.001 * torch.sum(self.actions ** 2, dim=-1)
 
-        total_reward = distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev
+        # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev
+        total_reward = distance_reward + pose_reward + lift_reward + angle_reward
         # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - action_penalty
 
-        self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
+        # self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
 
         # print(f"Total reward {total_reward.mean().item():.2f}")
 

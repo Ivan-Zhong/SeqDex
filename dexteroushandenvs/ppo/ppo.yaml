@@ -1,13 +1,13 @@
 use_recurrent_policy: False
-clip_param: 0.2
+clip_param: 0.1
 ppo_epoch: 5
 num_mini_batch: 4
 value_loss_coef: 0.5
 entropy_coef: 0.01
 lr: 0.0003
 eps: 0.00001
-max_grad_norm: 0.5
-num_env_steps: 10000000
+max_grad_norm: 1.0
+num_env_steps: 1000000000
 num_steps: 250
 use_gae: True
 gamma: 0.99
