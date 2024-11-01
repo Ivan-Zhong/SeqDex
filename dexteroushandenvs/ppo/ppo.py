@@ -7,6 +7,7 @@ class PPO():
     def __init__(self,
                  actor_critic,
                  clip_param,
+                 value_clip_param,
                  ppo_epoch,
                  num_mini_batch,
                  value_loss_coef,
@@ -14,11 +15,12 @@ class PPO():
                  lr=None,
                  eps=None,
                  max_grad_norm=None,
-                 use_clipped_value_loss=True):
+                 use_clipped_value_loss=False):
 
         self.actor_critic = actor_critic
 
         self.clip_param = clip_param
+        self.value_clip_param = value_clip_param
         self.ppo_epoch = ppo_epoch
         self.num_mini_batch = num_mini_batch
 
@@ -66,7 +68,7 @@ class PPO():
 
                 if self.use_clipped_value_loss:
                     value_pred_clipped = value_preds_batch + \
-                        (values - value_preds_batch).clamp(-self.clip_param, self.clip_param)
+                        (values - value_preds_batch).clamp(-self.value_clip_param, self.value_clip_param)
                     value_losses = (values - return_batch).pow(2)
                     value_losses_clipped = (
                         value_pred_clipped - return_batch).pow(2)

@@ -1,12 +1,12 @@
 use_recurrent_policy: False
-clip_param: 0.1
-ppo_epoch: 5
-num_mini_batch: 4
+clip_param: 0.2
+ppo_epoch: 10
+num_mini_batch: 8
 value_loss_coef: 0.5
 entropy_coef: 0.01
 lr: 0.0003
 eps: 0.00001
-max_grad_norm: 1.0
+max_grad_norm: 0.5
 num_env_steps: 1000000000
 num_steps: 250
 use_gae: True
@@ -15,3 +15,5 @@ gae_lambda: 0.95
 use_proper_time_limits: True
 save_interval: 100
 use_linear_lr_decay: True
+use_clipped_value_loss: False
+value_clip_param: 10.0

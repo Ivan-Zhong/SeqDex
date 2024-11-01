@@ -159,6 +159,10 @@ class VecTaskGPU(VecTask):
 # Python CPU/GPU Class
 class RLgamesVecTaskPython(VecTask):
 
+    def __init__(self, task, rl_device, clip_observations=5.0, clip_actions=1.0, use_clip_obs=False):
+        super().__init__(task, rl_device, clip_observations=clip_observations, clip_actions=clip_actions)
+        self.use_clip_obs = use_clip_obs
+
     def get_state(self):
         return torch.clamp(self.task.states_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
 
@@ -170,9 +174,13 @@ class RLgamesVecTaskPython(VecTask):
         # Get obs dict mapped to correct device
         obs_dict = self._to_device({})
 
-        # Clamp main obs buf and add it to obs dict
-        obs_dict["obs"] = torch.clamp(self.task.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
-        obs_dict["states"] = torch.clamp(self.task.states_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        if self.use_clip_obs:
+            # Clamp main obs buf and add it to obs dict
+            obs_dict["obs"] = torch.clamp(self.task.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+            obs_dict["states"] = torch.clamp(self.task.states_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        else:
+            obs_dict["obs"] = self.task.obs_buf.to(self.rl_device)
+            obs_dict["states"] = self.task.states_buf.to(self.rl_device)
 
         return obs_dict, self.task.rew_buf.to(self.rl_device), self.task.reset_buf.to(self.rl_device), self.task.extras
 
@@ -185,9 +193,13 @@ class RLgamesVecTaskPython(VecTask):
         # Get obs dict mapped to correct device
         obs_dict = self._to_device({})
 
-        # Clamp main obs buf and add it to obs dict
-        obs_dict["obs"] = torch.clamp(self.task.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
-        obs_dict["states"] = torch.clamp(self.task.states_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        if self.use_clip_obs:
+            # Clamp main obs buf and add it to obs dict
+            obs_dict["obs"] = torch.clamp(self.task.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+            obs_dict["states"] = torch.clamp(self.task.states_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        else:
+            obs_dict["obs"] = self.task.obs_buf.to(self.rl_device)
+            obs_dict["states"] = self.task.states_buf.to(self.rl_device)
 
         return obs_dict
     

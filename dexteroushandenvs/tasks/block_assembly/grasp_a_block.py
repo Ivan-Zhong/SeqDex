@@ -375,14 +375,14 @@ class GraspABlock:
             finger_name = fingers_names[i]
             finger_dist = torch.norm(self.lego_pos - finger_pos, p=2, dim=-1)
             # print(f"{finger_name} dist:", finger_dist[0])
-            distance_reward += finger_weight * 6 * torch.exp(- 4 * torch.clamp(finger_dist - 0.06, 0, None))
+            distance_reward += finger_weight * 0.6 * torch.exp(- 4 * torch.clamp(finger_dist - 0.06, 0, None))
 
         grasp_fingers_pos = [
             self.middle_point
         ]
         pose_dist = sum([tolerance(point_, self.lego_pos, 0.016, 0.01) for point_ in grasp_fingers_pos]) / len(grasp_fingers_pos)
         # print("Pose dist:", pose_dist[0])
-        pose_reward = pose_dist * 10
+        pose_reward = pose_dist
 
         # define angle reward
         angle_finger = [self.finger_thumb_pos, self.finger_index_pos, self.finger_middle_pos, self.finger_ring_pos, self.finger_pinky_pos]
@@ -394,22 +394,22 @@ class GraspABlock:
                 total_angle_dist += angle_dist
                 cnt += 1
         avg_angle_dist = total_angle_dist / cnt
-        angle_reward = torch.exp(-1.0 * torch.abs(avg_angle_dist)) * 10
+        angle_reward = torch.exp(-1.0 * torch.abs(avg_angle_dist))
 
         # target_lift_height = 0.3
         # target_pos = self.lego_start_pos.clone() + torch.tensor([0, 0, target_lift_height]).repeat(self.num_envs, 1).to(self.device)
         # goal_dist = torch.norm(self.lego_pos - target_pos, p=2, dim=-1)
         # lift_reward = pose_dist * 400 * torch.clamp((target_lift_height- goal_dist), -0.05, None)
 
-        lift_reward = pose_dist * 400 * torch.clamp((self.lego_pos[:, 2] - self.lego_start_pos[:, 2]), 0, None)
+        lift_reward = pose_dist * 40 * torch.clamp((self.lego_pos[:, 2] - self.lego_start_pos[:, 2]), 0, None)
 
         # action_penalty = 0.001 * torch.sum(self.actions ** 2, dim=-1)
 
-        # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev
-        total_reward = distance_reward + pose_reward + lift_reward + angle_reward
+        total_reward = distance_reward + pose_reward + lift_reward + angle_reward - self.E_prev
+        # total_reward = distance_reward + pose_reward + lift_reward + angle_reward
         # total_reward = distance_reward + pose_reward + lift_reward + angle_reward - action_penalty
 
-        # self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
+        self.E_prev = distance_reward + pose_reward + lift_reward + angle_reward
 
         # print(f"Total reward {total_reward.mean().item():.2f}")
 

@@ -176,7 +176,7 @@ def parse_task(args, cfg, cfg_train, sim_params, agent_index):
         except NameError as e:
             print(e)
             warn_task_name()
-        env = RLgamesVecTaskPython(task, rl_device)
+        env = RLgamesVecTaskPython(task, rl_device, use_clip_obs=args.use_clip_obs)
 
     elif args.task_type == "Lego":
         print("Task type: Lego")

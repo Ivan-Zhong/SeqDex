@@ -1,7 +1,5 @@
 import os
-import time
 
-import numpy as np
 import torch
 
 from .utils import get_ppo_yaml_args, update_linear_schedule
@@ -29,6 +27,7 @@ class PPORunner:
         self.agent = PPO(
             self.actor_critic,
             self.algo_args["clip_param"],
+            self.algo_args["value_clip_param"],
             self.algo_args["ppo_epoch"],
             self.algo_args["num_mini_batch"],
             self.algo_args["value_loss_coef"],
