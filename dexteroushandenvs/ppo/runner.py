@@ -1,4 +1,5 @@
 import os
+import json
 
 import torch
 
@@ -10,14 +11,13 @@ from .storage import RolloutStorage
 class PPORunner:
     def __init__(self, env, num_envs, output_dir):
         self.env = env
-        self.num_envs = num_envs
-
         self.device = torch.device("cuda:0")
 
         print("State space:", self.env.state_space)
         print("Action space:", self.env.act_space)
 
         self.algo_args = get_ppo_yaml_args()
+        self.algo_args["num_envs"] = num_envs
         self.actor_critic = Policy(
             self.env.state_space.shape,
             self.env.act_space,
@@ -36,9 +36,13 @@ class PPORunner:
             eps=self.algo_args["eps"],
             max_grad_norm=self.algo_args["max_grad_norm"])
         
-        self.rollouts = RolloutStorage(self.algo_args["num_steps"], self.num_envs, self.env.observation_space.shape, self.env.action_space, self.actor_critic.recurrent_hidden_state_size)
+        self.rollouts = RolloutStorage(self.algo_args["num_steps"], self.algo_args["num_envs"], self.env.observation_space.shape, self.env.action_space, self.actor_critic.recurrent_hidden_state_size)
 
         self.output_dir = output_dir
+
+        # Save the args
+        with open(os.path.join(self.output_dir, "arguments.json"), "w") as f:
+            json.dump(self.algo_args, f, indent=4)
 
     def run(self):
         obs_dict = self.env.reset()
@@ -46,10 +50,10 @@ class PPORunner:
         self.rollouts.obs[0].copy_(obs)
         self.rollouts.to(self.device)
 
-        episode_return = torch.zeros(self.num_envs, device=self.device)
+        episode_return = torch.zeros(self.algo_args["num_envs"], device=self.device)
 
         num_updates = int(
-            self.algo_args["num_env_steps"]) // self.algo_args["num_steps"] // self.num_envs
+            self.algo_args["num_env_steps"]) // self.algo_args["num_steps"] // self.algo_args["num_envs"]
         for j in range(num_updates):
 
             if self.algo_args["use_linear_lr_decay"]:
@@ -70,7 +74,7 @@ class PPORunner:
                 if torch.all(done):
                     obs_dict, _, _, _ = self.env.step(action)
                     print(f"Updates {j}, mean return {episode_return.mean().item():.2f}, max return {episode_return.max().item():.2f}, min return {episode_return.min().item():.2f}")
-                    episode_return = torch.zeros(self.num_envs, device=self.device)
+                    episode_return = torch.zeros(self.algo_args["num_envs"], device=self.device)
 
                 obs = obs_dict["states"]
 
