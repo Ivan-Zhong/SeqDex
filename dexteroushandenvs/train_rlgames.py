@@ -100,7 +100,7 @@ if __name__ == '__main__':
     
     else:
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        output_dir = os.path.join(current_dir, 'results', f"{args.task}-{time.strftime('%Y%m%d-%H%M%S')}")
+        output_dir = os.path.join(current_dir, 'results', args.task, args.exp_name, time.strftime('%Y%m%d-%H%M%S'))
         os.makedirs(output_dir)
         runner = PPORunner(env, args.num_envs, output_dir)
         runner.run()

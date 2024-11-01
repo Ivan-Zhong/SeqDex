@@ -287,7 +287,8 @@ def get_args(benchmark=False, use_rlg_config=False):
         {"name": "--record_lego_type", "type": int, "default": 0,
             "help": "Only for policy sequencing"},
         {"name": "--use_rlgames", "type": str2bool, "default": True,},
-        {"name": "--use_clip_obs", "type": str2bool, "default": False,}
+        {"name": "--use_clip_obs", "type": str2bool, "default": False,},
+        {"name": "--exp_name", "type": str, "default": "test",}
         ]
 
     if benchmark:
