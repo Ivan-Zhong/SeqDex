@@ -1,4 +1,4 @@
-use_recurrent_policy: False
+use_recurrent_policy: True
 clip_param: 0.2
 ppo_epoch: 10
 num_mini_batch: 8
